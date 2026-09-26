@@ -33,5 +33,11 @@ export default defineConfig({
     bail: 1,
     passWithNoTests: false,
     reporters: ['default'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'cobertura'],
+      reportsDirectory: './coverage',
+      reportOnFailure: true,
+    },
   },
 });

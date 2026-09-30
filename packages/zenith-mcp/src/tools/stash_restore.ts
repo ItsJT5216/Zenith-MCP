@@ -78,7 +78,7 @@ export function register(server: ToolServer, ctx: ToolContext) {
         if (args.mode === 'list') {
             const { start, end } = parseListRange(args.range);
             const { entries, isGlobal } = listStash(ctx, routedFile, {
-                type: args.type,
+                ...(args.type !== undefined ? { type: args.type } : {}),
                 start,
                 end,
             });

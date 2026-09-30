@@ -117,8 +117,8 @@ export function listStash(ctx: FsContext, filePath?: string, options: ListStashO
     const start = Math.max(1, Math.trunc(options.start ?? 1));
     const end = Math.max(start, Math.trunc(options.end ?? 10));
     const rows = adapterListStash(conn, {
-        filePath,
-        type: options.type,
+        ...(filePath !== undefined ? { filePath } : {}),
+        ...(options.type !== undefined ? { type: options.type } : {}),
         sinceTimestamp: Date.now() - STASH_TTL_MS,
         start,
         end,

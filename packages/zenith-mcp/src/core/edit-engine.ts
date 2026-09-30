@@ -6,14 +6,13 @@ import { getLangForFile, checkSyntaxErrors } from '../core/tree-sitter.js';
 // extractor. The only call site allowed to extract directly is the
 // ingestion path in `./symbol-index.ts`.
 //
-// Known limitation: this consumer applies edits to an in-flight buffer
-// (`workingContent`) that mutates between symbol-mode edits in the
-// same applyEditList run. The DB reflects the last-indexed disk state,
-// not the in-memory buffer, so successive symbol-mode edits in one run
-// may target lines that have shifted. That is an edit-engine concern
-// to address separately (e.g. pre-resolve all symbol ranges before any
-// edit applies, with line-shift accounting between iterations) and is
-// NOT a license to keep this site on direct extraction.
+// The DB reflects the last-indexed disk state, not the in-flight buffer
+// (`workingContent`) that mutates between symbol-mode edits in the same
+// applyEditList run. That frame gap is closed inside applyEditList by
+// the splice ledger (`lineShifts` + `mapDiskLine`), which replays every
+// prior in-batch shift to map disk-frame symbol coordinates into the
+// current working frame (see the ledger comment there). The ledger is
+// NOT a license to put this call site back on direct extraction.
 import { loadSymbolInFile } from '../core/indexed-symbols.js';
 
 // ---------------------------------------------------------------------------

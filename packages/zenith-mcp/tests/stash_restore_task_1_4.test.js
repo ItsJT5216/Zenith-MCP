@@ -28,6 +28,10 @@ function mkCtx(dir, sessionId) {
             if (path.isAbsolute(p)) return p;
             return path.join(dir, p);
         },
+        validateNewFilePath: async (p) => {
+            if (path.isAbsolute(p)) return p;
+            return path.join(dir, p);
+        },
     };
 }
 

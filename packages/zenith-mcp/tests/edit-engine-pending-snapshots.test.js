@@ -63,24 +63,15 @@ describe('applyEditList pendingSnapshots', () => {
         expect(snap.originalText).toBe('function alpha(x) {\n    return x + 1;\n}');
     });
 
-    // TODO(edit-engine in-flight line tracking): this test exercises a
-    // multi-symbol-edit sequence where the FIRST edit changes line
-    // counts. Under the new DB-backed symbol-index path (per
-    // docs/toon-constraints/constraints.md §0.5), each `loadSymbolInFile`
-    // call returns positions from the persisted index, which reflects
-    // disk content — not the in-flight `workingContent` buffer that
-    // already absorbed the first edit. So the second symbol's reported
-    // line range no longer matches its position in `workingContent`,
-    // and the joined-lines extraction produces stale `originalText`.
-    //
-    // The architectural decision (Tanner, PR #20): the symbol-fact
-    // layer is correct as-is. The fix for this scenario belongs to
-    // edit-engine itself — e.g. resolve all symbol ranges from the
-    // pristine source up front, then apply each edit with explicit
-    // line-shift accounting between iterations. That work is deferred
-    // to a separate PR. Skipping here so the suite stays honest about
-    // current behavior without losing the regression intent.
-    it.skip('originalText equals joined lines [sym.line, sym.endLine] of working content AT time of edit', async () => {
+    // Multi-symbol batch where the FIRST edit changes line counts: the
+    // DB-backed `loadSymbolInFile` returns DISK-frame coordinates, and the
+    // edit-engine's splice ledger (`lineShifts` + `mapDiskLine`) replays
+    // prior in-batch shifts to map them into the in-flight `workingContent`
+    // frame. This was originally skipped when the DB-backed symbol-index
+    // path landed without that ledger (deferred in PR #20); the ledger
+    // shipped in the PR #20 x PR #23 integration, so the regression test
+    // is live again.
+    it('originalText equals joined lines [sym.line, sym.endLine] of working content AT time of edit', async () => {
         // Two symbol edits — second's originalText must reflect post-first-edit state
         const edits = [
             {
@@ -107,7 +98,6 @@ describe('applyEditList pendingSnapshots', () => {
         // first edit and check that beta's lines in that state match the snapshot.
         const afterFirst = jsSource.split('\n');
         // apply first edit manually: replace alpha block
-        const alphaIdx = 0;
         afterFirst.splice(0, 3, 'function alpha(x) {', '    // replaced', '    return x;', '}');
         const stateBeforeBeta = afterFirst.join('\n');
         const stateLines = stateBeforeBeta.split('\n');

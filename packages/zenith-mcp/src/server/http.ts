@@ -57,7 +57,7 @@ const _pkg = _require('../../package.json') as { version: string };
 // ---------------------------------------------------------------------------
 if (!configExists()) {
     console.error(
-        'FATAL: No Zenith-MCP config found.\n' +
+        'No Zenith-MCP config found.\n' +
         'Run the stdio server once interactively to complete first-time setup:\n' +
         '  npx zenith-mcp /path/to/your/project\n' +
         '(replace /path/to/your/project with an absolute path to a directory you want the server to access)\n' +
@@ -105,8 +105,8 @@ const port = cliPort ?? config.port;
 const ZENITH_API_KEY = process.env.ZENITH_API_KEY || process.env.ZENITH_MCP_API_KEY || '';
 if (!ZENITH_API_KEY) {
     console.error(
-        'FATAL: ZENITH_API_KEY or ZENITH_MCP_API_KEY environment variable is required for the HTTP transport.\n' +
-        'Set it to a secret string and pass it as a Bearer token in the Authorization header.',
+        'ZENITH_API_KEY or ZENITH_MCP_API_KEY environment variable is required for the HTTP transport.\n' +
+        'Zenith accepts only a Bearer token format for authorization.',
     );
     process.exit(1);
 }
@@ -235,11 +235,6 @@ app.listen(port, host, () => {
     console.error(`Zenith-MCP HTTP Server listening on http://${host}:${port}`);
     console.error(`  MCP (2026-07-28, stateless; 2025 fallback): POST /mcp`);
     console.error(`  Health:          GET /health`);
-    if (baselineAllowedDirs.length > 0) {
-        console.error(`  Baseline dirs:   ${baselineAllowedDirs.join(', ')}`);
-    } else {
-        console.error(`  No baseline dirs — tools resolve project scope per call (detection) or use the global workspace`);
-    }
     if (_loadedEnvFiles.length > 0) {
         console.error(`  Loaded env:      ${_loadedEnvFiles.join(', ')}`);
     } else {

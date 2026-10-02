@@ -169,3 +169,54 @@ describe('rawToConfig — round-trip via configToRaw', () => {
         expect(restored.tools.read_file).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// ### Advanced — bash_timeout_seconds / bash_max_timeout_seconds
+// ---------------------------------------------------------------------------
+
+describe('advanced.bash_timeout_seconds / bash_max_timeout_seconds', () => {
+    // A minimal RawConfig: the ### Advanced header followed by the given kv rows.
+    function advancedRaw(...kvs) {
+        return [{ type: 'subsection', name: 'Advanced', raw: '### Advanced' }, ...kvs];
+    }
+    function kv(key, rawValue) {
+        return { type: 'kv', key, value: rawValue, rawValue, inlineComment: null };
+    }
+
+    it('defaults to 120 seconds with a 600 second cap', () => {
+        expect(DEFAULT_CONFIG.advanced.bash_timeout_seconds).toBe(120);
+        expect(DEFAULT_CONFIG.advanced.bash_max_timeout_seconds).toBe(600);
+    });
+
+    it('configToRaw emits both keys after the ### Advanced subsection', () => {
+        const raw = configToRaw(DEFAULT_CONFIG);
+        const advancedIdx = raw.findIndex(e => e.type === 'subsection' && e.name === 'Advanced');
+        expect(advancedIdx).toBeGreaterThan(-1);
+        const afterAdvanced = raw.slice(advancedIdx + 1);
+        const timeout = afterAdvanced.find(e => e.type === 'kv' && e.key === 'bash_timeout_seconds');
+        const max = afterAdvanced.find(e => e.type === 'kv' && e.key === 'bash_max_timeout_seconds');
+        expect(timeout).toMatchObject({ key: 'bash_timeout_seconds', value: 120, rawValue: '120' });
+        expect(max).toMatchObject({ key: 'bash_max_timeout_seconds', value: 600, rawValue: '600' });
+    });
+
+    it('rawToConfig parses positive integers', () => {
+        const config = rawToConfig(advancedRaw(kv('bash_timeout_seconds', '45'), kv('bash_max_timeout_seconds', '900')));
+        expect(config.advanced.bash_timeout_seconds).toBe(45);
+        expect(config.advanced.bash_max_timeout_seconds).toBe(900);
+    });
+
+    it.each(['0', '-5', 'abc', '1.9', '45oops', '1e3', '1000000000000000000000', '9'.repeat(309)])('rawToConfig keeps the defaults for %j', (bad) => {
+        const config = rawToConfig(advancedRaw(kv('bash_timeout_seconds', bad), kv('bash_max_timeout_seconds', bad)));
+        expect(config.advanced.bash_timeout_seconds).toBe(DEFAULT_CONFIG.advanced.bash_timeout_seconds);
+        expect(config.advanced.bash_max_timeout_seconds).toBe(DEFAULT_CONFIG.advanced.bash_max_timeout_seconds);
+    });
+
+    it('round-trips custom values through configToRaw → rawToConfig', () => {
+        const custom = structuredClone(DEFAULT_CONFIG);
+        custom.advanced.bash_timeout_seconds = 30;
+        custom.advanced.bash_max_timeout_seconds = 1200;
+        const restored = rawToConfig(configToRaw(custom));
+        expect(restored.advanced.bash_timeout_seconds).toBe(30);
+        expect(restored.advanced.bash_max_timeout_seconds).toBe(1200);
+    });
+});

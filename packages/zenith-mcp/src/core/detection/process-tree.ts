@@ -4,11 +4,13 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
-// Process-tree caller-cwd detection — PRIVATE to ProjectContext.
+// Process-tree caller-cwd detection — read by exactly two modules.
 //
-// ⚠ Do NOT import this module anywhere except core/project-context.ts.
-// A guard test (tests/detection-encapsulation.test.js) fails the suite if any
-// other module imports it.
+// ⚠ Do NOT import this module anywhere except core/project-context.ts (the
+// one resolver: it decides what the candidates mean) and core/caller-cwd.ts
+// (it reads the nearest candidate and decides nothing). A guard test
+// (tests/detection-encapsulation.test.js) fails the suite if any other module
+// imports it.
 //
 // The kernel records which process spawned us (ppid) and each ancestor's
 // current working directory. For terminal-launched MCP hosts, an ancestor's

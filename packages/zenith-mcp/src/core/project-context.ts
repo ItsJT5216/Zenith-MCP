@@ -62,12 +62,14 @@ function getGlobalDb(): DbConnection {
 // correct identity, clamping, and notifications — it just never writes into
 // the user's directories.
 //
-// Detection helpers live in ./detection/ as pure functions. They are PRIVATE
-// to this class — tests/detection-encapsulation.test.js fails the suite if
-// anything else imports them. That guard exists because this codebase once
-// grew three competing resolvers out of exactly this kind of drift
-// (removed 2026-05-25 in b18fa09, remnants deleted 2026-07-14, detection
-// restored INSIDE this class 2026-07-14). One resolver. Keep it that way.
+// Detection helpers live in ./detection/ as pure functions. Binding decisions
+// are PRIVATE to this class — tests/detection-encapsulation.test.js fails the
+// suite if anything other than this file and core/caller-cwd.ts (which reads
+// the process-tree walk and decides nothing) imports them. That guard exists
+// because this codebase once grew three competing resolvers out of exactly
+// this kind of drift (removed 2026-05-25 in b18fa09, remnants deleted
+// 2026-07-14, detection restored INSIDE this class 2026-07-14). One resolver.
+// Keep it that way.
 // ---------------------------------------------------------------------------
 
 type BindingTier = 'explicit' | 'registry' | 'detected' | 'global';

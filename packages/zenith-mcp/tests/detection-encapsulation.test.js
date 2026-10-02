@@ -11,6 +11,9 @@ import { fileURLToPath } from 'url';
 // This test makes the sole-consumer rule mechanical instead of hopeful:
 // if any module other than core/project-context.ts imports from
 // core/detection/, the suite fails and names the offender.
+//
+// One admitted exception: core/caller-cwd.ts is the single non-resolver
+// consumer — it reads the ancestry walk and makes no binding decision.
 // ---------------------------------------------------------------------------
 
 const SRC_ROOT = path.resolve(
@@ -21,6 +24,7 @@ const SRC_ROOT = path.resolve(
 
 const ALLOWED_IMPORTERS = new Set([
     path.join(SRC_ROOT, 'core', 'project-context.ts'),
+    path.join(SRC_ROOT, 'core', 'caller-cwd.ts'),
 ]);
 
 function walkSourceFiles(dir, out = []) {
@@ -36,7 +40,7 @@ function walkSourceFiles(dir, out = []) {
 }
 
 describe('detection module encapsulation', () => {
-    it('only core/project-context.ts imports from core/detection/', () => {
+    it('only core/project-context.ts and core/caller-cwd.ts import from core/detection/', () => {
         const offenders = [];
         for (const file of walkSourceFiles(SRC_ROOT)) {
             if (file.includes(`${path.sep}core${path.sep}detection${path.sep}`)) continue;
@@ -47,10 +51,10 @@ describe('detection module encapsulation', () => {
                 offenders.push(path.relative(SRC_ROOT, file));
             }
         }
-        expect(offenders, `detection helpers imported outside ProjectContext by: ${offenders.join(', ')} — all binding decisions belong to ProjectContext`).toEqual([]);
+        expect(offenders, `detection helpers imported outside core/project-context.ts and core/caller-cwd.ts by: ${offenders.join(', ')} — all binding decisions belong to ProjectContext`).toEqual([]);
     });
 
-    it('the allowed importer actually exists (guard stays honest)', () => {
+    it('the allowed importers actually exist (guard stays honest)', () => {
         for (const allowed of ALLOWED_IMPORTERS) {
             expect(fs.existsSync(allowed)).toBe(true);
         }

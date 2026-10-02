@@ -80,7 +80,7 @@ All sources are written in TypeScript under `src/` in each package.
 - **Binary**: `zenith-mcp`
 - Runs as a persistent subprocess spawned by the MCP client.
 - Allocates a single `FilesystemContext` initialized with allowed paths passed via command-line arguments.
-- Leverages the MCP Roots Protocol (if supported by the client) to dynamically update the set of allowed directories at runtime.
+- Starts with or without allowed directories; MCP Roots are not used — project scope is derived per call by `ProjectContext` (§5.8).
 - First-run wizard routes to stderr to keep stdout clean for JSON-RPC.
 
 ### 3.2 HTTP Transport (Multi-Tenant)
@@ -111,33 +111,34 @@ All sources are written in TypeScript under `src/` in each package.
 To prevent directory traversal and unauthorized filesystem modifications:
 
 1. All path arguments must pass through `FilesystemContext.validatePath()`.
-2. Paths are expanded (`~`), resolved to absolute coordinates, and normalized.
+2. Paths are expanded (`~`), resolved to absolute coordinates, and normalized. A relative path resolves against the caller's working directory — `core/caller-cwd.ts`, the nearest ancestor process whose cwd is readable (the launcher shell, or the MCP client on stdio), else the server's own cwd — so a relative path lands where the caller is working, not where the server happens to run.
 3. Symlinks are resolved via `fs.realpathSync` and re-checked against allowed directories.
 4. If the path falls outside allowed boundaries, an access-denied error is thrown before any filesystem operation.
 5. New file creation uses the `wx` (exclusive) flag to prevent symlink exploitation.
 6. Search, indexing, and directory-traversal tools apply `isSensitive()` filtering to block credential-like files (`.env`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, etc.) via configurable `minimatch` patterns.
+7. Enforcement is opt-in: the top-level `Sandbox` config flag (default `disabled`) turns the allowed directories from project-context hints into the enforced boundary. A relative allowed directory is anchored to the server's own working directory and does not move with the caller; a requested path that resolves outside the boundary — including a relative one whose caller cwd lies outside it, and the `bash` tool's working directory — is refused rather than redirected. Even then the `bash` tool (§6.12) is the exception: `validatePath()` gates only its working directory; the command runs with the server process's privileges, and `bash: disabled` under `### Tools` is the control.
 
 ---
 
 ## 5. Core Architectural Modules
 
-### 5.1 `core/server.ts` — Server Factory
+### 5.1 `core/server.ts` — Tool Orchestration
 
 ```typescript
-export function createFilesystemServer(ctx: FilesystemContext): McpServer
+export function registerEnabledTools(toolServer: ToolServer, ctx: ToolContext): void
 ```
 
-- Creates the `McpServer` instance with version read from `package.json` at runtime.
-- **`TOOL_REGISTRY`** constant: Array of `{ name, register }` — single source of truth for all 11 tools.
+- Each entrypoint constructs its own `McpServer` (HTTP: one per request; stdio: one per connection) and passes it in as the SDK-agnostic `ToolServer`; `withCallerEnvironmentPing` wraps every handler and forwards the SDK's per-call `extra` (the cancellation signal) to it.
+- **`TOOL_REGISTRY`** constant: Array of `{ name, register }` — single source of truth for all 12 tools.
 - Config-driven tool enable/disable via `syncedConfig.tools[entry.name]`.
 - Loads adapter settings and configures adapter registry when enabled.
 - Retrieval code exists under `src/retrieval/`, but it is disabled by default and excluded from the main package compile.
-- Wires MCP Roots handlers via `attachRootsHandlers()`.
+- No MCP Roots wiring — scope is derived per call (§5.8).
 
 ### 5.2 `core/lib.ts` — Filesystem Access Layer
 
 - **`FilesystemContext` interface**: `getAllowedDirectories()`, `setAllowedDirectories()`, `validatePath()`, `validateNewFilePath()`
-- **`createFilesystemContext(initialAllowedDirectories)`**: Factory with symlink-safe, ancestor-aware path validation.
+- **`createFilesystemContext(initialAllowedDirectories)`**: Factory with symlink-safe, ancestor-aware path validation. Relative requested paths resolve against the caller's working directory (`core/caller-cwd.ts`, §4); relative allowed directories resolve against the server's own.
 - Atomic file writes: exclusive creation (`wx`) → temp-file + `rename()` fallback.
 - Diff utilities: `createUnifiedDiff()`, `createMinimalDiff()`.
 - File I/O: `readFileContent()`, `writeFileContent()`, `applyFileEdits()`, `tailFile()`, `headFile()`, `offsetReadFile()`.
@@ -370,6 +371,23 @@ Discriminated union on `mode`:
 | `restore` | `symbol`, `file`, `version`, `dryRun` | Rollback to a version snapshot |
 | `history` | `symbol`, `file` | View symbol version history |
 
+### 6.12 `bash`
+
+Run a bash command and return a terminal-style transcript:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `command` | string | Command to run with `bash -c` (required) |
+| `timeout` | integer | Seconds (≥ 1); defaults to `bash_timeout_seconds`, clamped to `bash_max_timeout_seconds` |
+
+The command runs in the caller's working directory — `core/caller-cwd.ts`, read from process ancestry: the nearest ancestor whose cwd is readable (the launcher shell, or the MCP client on stdio), else the server's own; `ProjectContext` (§5.8) is not consulted — which is also the base a relative path given to the file tools resolves against, so bash and the file tools never disagree about where a relative path lands. There is no working-directory parameter; to work elsewhere, the command uses absolute paths. The working directory is validated like any other path: with the sandbox enabled, one outside the allowed directories is refused with the reason `Cannot run in the caller's working directory <dir>: Access denied: <dir> is outside allowed directories`. The command runs in its own process group with stdin closed; on timeout the whole group receives SIGTERM, then SIGKILL after 2 s, and whatever output was captured is still returned. stdout and stderr are merged in arrival order and sanitized the way a terminal renders them (ANSI/OSC escapes stripped, `\r` returns to column 0 and overwrites, erase-line sequences honoured so progress bars collapse to their final frame, control bytes other than tab removed, UTF-8 decoded correctly across chunk boundaries), and the output is returned in full. The result is always `<cwd>$ <command>` (`<cwd>` being the directory the command ran in), the output, then a status line — `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (`[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening) — so a non-zero exit is data rather than an error, the error channel is reserved for the tool itself failing (a refused working directory, `bash not found.`, spawn failure), and the timeout default (120 s) and cap (600 s) come from the `bash_timeout_seconds` / `bash_max_timeout_seconds` config keys (§8).
+
+The working directory decides where the command runs and nothing else: it is not project evidence and never changes what `ProjectContext` is bound to. The path sandbox (§4) gates only that working directory — the command itself runs with the server process's privileges and can reach any file or resource the server can.
+
+Stopping a command — on timeout, or when the client cancels the request (the SDK's abort signal, forwarded to every tool by `withCallerEnvironmentPing`) — sends SIGTERM to the process group, then SIGKILL 2 s later; on Windows, which has no process groups, `taskkill /T /F` and its exit code stand in for both. The call completes only once the group is observed empty or the SIGKILL has gone out, so a descendant in the group that ignores SIGTERM cannot survive behind a `[timed out …; process group killed]` or `[cancelled; process group killed]` status line. The kill reaches the command's process group; a job the command moved to another group (`set -m`) is not reached. A background child that outlives the shell while holding its pipes is cut off 250 ms after the shell exits, and the shell's own status is reported. A shell whose call is in flight is tracked and swept — SIGKILL to its group — when the server exits or receives SIGTERM/SIGINT/SIGHUP; the listener runs first and re-raises the signal with its default disposition only when it is the sole listener. What outlives its call — a service the command started detached — is not tracked and not swept.
+
+Rendering follows ECMA-48 structurally rather than by pattern: CSI and ESC sequences are recognised whether or not a pipe chunk boundary splits them; control strings (OSC/DCS/SOS/PM/APC) are swallowed with their payload up to ST or BEL — newlines included, so a title or hyperlink payload never reaches the transcript; stray control bytes are removed. What is modelled per line, with cells being code points (a tab or a wide character is one cell): printable text, `\r`, backspace, erase-in-line (EL 0/1/2), cursor-to-column (CHA) and cursor back/forward (CUB/CUF); colours and every other sequence are dropped. Output is rendered as it arrives straight into the transcript, completed pieces joined in batches, so memory stays at roughly the transcript's own size; cursor motion never creates cells (a move past the end of the line lands at the end), so nothing in the output can make the renderer allocate beyond the text it received.
+
 ---
 
 ## 7. Client Configuration & Adapters
@@ -416,6 +434,8 @@ refactor_max_chars: 30000
 refactor_max_context: 30
 refactor_version_ttl_hours: 24
 session_ttl_ms: 1800000
+bash_timeout_seconds: 120
+bash_max_timeout_seconds: 600
 default_excludes: node_modules,.git,.next,...
 sensitive_patterns: **/.env,**/*.pem,...
 ```

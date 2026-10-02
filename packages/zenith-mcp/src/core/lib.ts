@@ -6,6 +6,7 @@ import { createInterface } from 'readline';
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 import { normalizePath, expandHome } from './path-utils.js';
+import { getCallerWorkingDirectory } from './caller-cwd.js';
 
 function hasCode(e: unknown): e is { code: string } {
     return typeof e === 'object' && e !== null && 'code' in e && typeof (e as Record<string, unknown>).code === 'string';
@@ -81,9 +82,13 @@ export function createFilesystemContext(initialAllowedDirectories: string[] = []
 
     async function validatePath(requestedPath: string) {
         const expandedPath = expandHome(requestedPath);
+        // A relative requested path resolves against the caller's working directory
+        // (core/caller-cwd.ts): where the launcher shell or MCP client is working, not
+        // where this server runs. The configured sandbox boundary (isInsideAllowed)
+        // deliberately stays anchored to this process's own cwd and does not move with it.
         const absolute = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
-            : path.resolve(process.cwd(), expandedPath);
+            : path.resolve(getCallerWorkingDirectory(), expandedPath);
         normalizePath(absolute);
 
         try {
@@ -140,9 +145,11 @@ export function createFilesystemContext(initialAllowedDirectories: string[] = []
 
     async function validateNewFilePath(requestedPath: string): Promise<string> {
         const expandedPath = expandHome(requestedPath);
+        // Same base as validatePath: a relative requested path resolves against the
+        // caller's working directory (core/caller-cwd.ts); the boundary does not move with it.
         const absolute = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
-            : path.resolve(process.cwd(), expandedPath);
+            : path.resolve(getCallerWorkingDirectory(), expandedPath);
         normalizePath(absolute);
         const { realAncestor, missingSegments } = await resolveNearestExistingAncestor(absolute);
         normalizePath(realAncestor);

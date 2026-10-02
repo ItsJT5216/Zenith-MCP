@@ -1,6 +1,6 @@
 /**
  * Behavioral tests covering robustness gaps identified in PR #12 review.
- * Tests: roots-utils tilde, symbol-index purge,
+ * Tests: symbol-index purge,
  * write_file stat errors, directory sensitive filtering, search_file errors,
  * refactor_batch schema strictness, path-validation prefix collisions.
  */
@@ -32,58 +32,6 @@ function captureHandler() {
     };
     return { server, calls };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. roots-utils: file:~ and file:~/path resolve to $HOME paths
-// ─────────────────────────────────────────────────────────────────────────────
-describe('roots-utils — tilde URI forms', () => {
-    it('resolves ~ (bare tilde) to home directory', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const result = await getValidRootDirectories([{ uri: '~' }]);
-        expect(result).toContain(home);
-    });
-
-    it('resolves ~/existing-subdir to home subdir', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        // Use a subdir that definitely exists under $HOME
-        const entries = fs.readdirSync(home);
-        const subdir = entries.find(e => {
-            try { return fs.statSync(path.join(home, e)).isDirectory(); } catch { return false; }
-        });
-        if (!subdir) return; // skip if home has no subdirs (very unlikely)
-        const result = await getValidRootDirectories([{ uri: `~/${subdir}` }]);
-        expect(result).toContain(path.join(home, subdir));
-    });
-
-    it('resolves file:~ to home directory', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const result = await getValidRootDirectories([{ uri: 'file:~' }]);
-        // Should resolve to home, not be empty
-        expect(result.length).toBeGreaterThanOrEqual(1);
-        expect(result[0]).toBe(home);
-    });
-
-    it('resolves file:~/existing-subdir to home subdir', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const entries = fs.readdirSync(home);
-        const subdir = entries.find(e => {
-            try { return fs.statSync(path.join(home, e)).isDirectory(); } catch { return false; }
-        });
-        if (!subdir) return;
-        const result = await getValidRootDirectories([{ uri: `file:~/${subdir}` }]);
-        expect(result).toContain(path.join(home, subdir));
-    });
-
-    it('file:~/nonexistent returns empty', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const result = await getValidRootDirectories([{ uri: 'file:~/nonexistent_dir_xyz_9999' }]);
-        expect(result).toHaveLength(0);
-    });
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. isSensitive — .config/** works outside $HOME

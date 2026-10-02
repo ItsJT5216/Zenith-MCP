@@ -18,7 +18,7 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizePath, expandHome } from './path-utils.js';
 import { getProjectContext } from './project-context.js';
-import { type ToolServer, type ToolContext } from '../tools/types.js';
+import { type ToolServer, type ToolContext, type ToolCallExtra } from '../tools/types.js';
 import { type FilesystemContext } from './lib.js';
 
 import { register as registerReadFile } from '../tools/read_file.js';
@@ -32,6 +32,7 @@ import { register as registerSearchFiles } from '../tools/search_files.js';
 import { register as registerFilesystem } from '../tools/filesystem.js';
 import { register as registerStashRestore } from '../tools/stash_restore.js';
 import { register as registerRefactorBatch } from '../tools/refactor_batch.js';
+import { register as registerBash } from '../tools/bash.js';
 import { configureRegistry } from '../adapters/index.js';
 import { loadConfig, syncToolsWithConfig, patchToolsInConfig, expandTilde } from '../config/index.js';
 import type { ZenithConfig } from '../config/index.js';
@@ -91,6 +92,7 @@ const TOOL_REGISTRY: Array<{
   { name: "file_manager",        register: registerFilesystem },
   { name: "stashRestore",        register: registerStashRestore },
   { name: "refactor_batch",      register: registerRefactorBatch },
+  { name: "bash",                register: registerBash },
 ];
 
 /**
@@ -167,15 +169,15 @@ export function withCallerEnvironmentPing(toolServer: ToolServer, ctx: ToolConte
     registerTool<TArgs>(
       name: string,
       registration: Parameters<ToolServer['registerTool']>[1],
-      handler: (args: TArgs) => ReturnType<Parameters<ToolServer['registerTool']>[2]>
+      handler: (args: TArgs, extra?: ToolCallExtra) => ReturnType<Parameters<ToolServer['registerTool']>[2]>
     ): void {
-      toolServer.registerTool<TArgs>(name, registration, (args: TArgs) => {
+      toolServer.registerTool<TArgs>(name, registration, (args: TArgs, extra?: ToolCallExtra) => {
         try {
           getProjectContext(ctx).pingCallerEnvironment();
         } catch {
           // Detection is best-effort by contract — never fail a tool call.
         }
-        return handler(args);
+        return handler(args, extra);
       });
     },
   };

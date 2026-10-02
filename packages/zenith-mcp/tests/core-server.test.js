@@ -14,6 +14,7 @@ const TOOL_REGISTERS = [
     '../dist/tools/filesystem.js',
     '../dist/tools/stash_restore.js',
     '../dist/tools/refactor_batch.js',
+    '../dist/tools/bash.js',
 ];
 
 const CONFIG_INDEX = '../dist/config/index.js';
@@ -103,7 +104,7 @@ async function getToolMocks(customMocks = {}) {
 }
 
 describe('registerEnabledTools', () => {
-    it('registers all 11 tools', async () => {
+    it('registers all 12 tools', async () => {
         const { mod, mocks } = await getToolMocks();
         const toolServer = makeMockToolServer();
         const ctx = makeMockCtx();

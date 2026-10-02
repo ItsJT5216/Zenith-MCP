@@ -20,10 +20,12 @@
     "build": "tsc --build",
     "rebuild": "tsc --build --force",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
+    "@vitest/coverage-v8": "^4.1.11",
     "shx": "^0.4.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

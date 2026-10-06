@@ -36,12 +36,12 @@
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@iarna/toml": "^2.2.5",
-    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/server": "2.0.0",
     "diff": "^9.0.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
-    "js-yaml": "^5.4.1",
+    "js-yaml": "^5.4.2",
     "json5": "^2.2.3",
     "jsonc-parser": "^3.3.1",
     "minimatch": "^10.2.6",
@@ -50,7 +50,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/emscripten": "^1.41.6",
     "@types/express": "^5.0.6",

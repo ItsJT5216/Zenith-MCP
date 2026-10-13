@@ -1,73 +1,36 @@
-name: Release
+name: Release Readiness
 
-# Automated release pipeline using Changesets.
-#
-# On every push to main, this workflow either:
-#   - Opens/updates a "Version Packages" PR when unreleased changesets exist,
-#     OR
-#   - Publishes the packages to npm when that PR is merged (i.e. no changesets
-#     remain but versions have been bumped).
-#
-# You never need to run changeset version or npm publish by hand.
-
+# Release automation is in publish.yml. This verifies package contents,
+# without the old broken Changesets bot or credentialed publishing on pushes.
 on:
   push:
-    branches:
-      - main
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+    branches: [main]
+    paths:
+      - "packages/**"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
 
 permissions:
-  contents: write # create version PR / push tags
-  pull-requests: write # open the "Version Packages" PR
-
-env:
-  NODE_VERSION: "26"
-  PNPM_VERSION: "11.13.1"
+  contents: read
 
 jobs:
-  release:
-    name: Version or Publish
+  verify:
+    name: Build, test, and inspect one npm archive
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          fetch-depth: 0
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: "https://registry.npmjs.org"
+          node-version: "26"
           cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm run build
-
-      - name: Test
-        run: pnpm run test
-
-      - name: Create Release PR or Publish
-        uses: changesets/action@v2
-        with:
-          # When there are changesets: opens/updates the "Version Packages" PR.
-          # When that PR merges (versions bumped, no changesets left): runs publish.
-          version: pnpm run version-packages
-          publish: pnpm run release:publish
-          commit: "chore: version packages"
-          title: "chore: version packages"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run test
+      - run: pnpm run test:toon
+      - run: node scripts/stage-npm-package.mjs
+      - run: pnpm run release:verify

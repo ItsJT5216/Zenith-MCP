@@ -1,67 +1,108 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# This workflow helps you trigger a SonarCloud analysis of your code and populates
-# GitHub Code Scanning alerts with the vulnerabilities found.
-# Free for open source project.
-
-# 1. Login to SonarCloud.io using your GitHub account
-
-# 2. Import your project on SonarCloud
-#     * Add your GitHub organization first, then add your repository as a new project.
-#     * Please note that many languages are eligible for automatic analysis,
-#       which means that the analysis will start automatically without the need to set up GitHub Actions.
-#     * This behavior can be changed in Administration > Analysis Method.
-#
-# 3. Follow the SonarCloud in-product tutorial
-#     * a. Copy/paste the Project Key and the Organization Key into the args parameter below
-#          (You'll find this information in SonarCloud. Click on "Information" at the bottom left)
-#
-#     * b. Generate a new token and add it to your Github repository's secrets using the name SONAR_TOKEN
-#          (On SonarCloud, click on your avatar on top-right > My account > Security
-#           or go directly to https://sonarcloud.io/account/security/)
-
-# Feel free to take a look at our documentation (https://docs.sonarcloud.io/getting-started/github/)
-# or reach out to our community forum if you need some help (https://community.sonarsource.com/c/help/sc/9)
-
 name: SonarCloud analysis
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main" ]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
-  pull-requests: read # allows SonarCloud to decorate PRs with analysis results
+  contents: read
+  pull-requests: read
 
 jobs:
   Analysis:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Analyze with SonarCloud
-
-        # You can pin the exact commit or the version.
-        # uses: SonarSource/sonarcloud-github-action@v2.2.0
-        uses: SonarSource/sonarcloud-github-action@ffc3010689be73b8e5ae0c57ce35968afd7909e8
+      - name: Require authorized analysis
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}   # Generate a token on Sonarcloud.io, add it to the secrets of this repo with the name SONAR_TOKEN (Settings > Secrets > Actions > add new repository secret)
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::error::Fork PR analysis requires an authorized trusted revision; this workflow cannot give a fork analysis credentials."
+            exit 1
+          fi
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::error::SONAR_TOKEN is unavailable. Configure an analysis token for this execution context; Dependabot runs require a same-name Dependabot secret."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Additional arguments for the SonarScanner CLI
-          args:
-            # Unique keys of your project and organization. You can find them in SonarCloud > Information (bottom-left menu)
-            # mandatory
-            -Dsonar.projectKey=
-            -Dsonar.organization=
-            # Comma-separated paths to directories containing main source files.
-            #-Dsonar.sources= # optional, default is project base directory
-            # Comma-separated paths to directories containing test source files.
-            #-Dsonar.tests= # optional. For more info about Code Coverage, please refer to https://docs.sonarcloud.io/enriching/test-coverage/overview/
-            # Adds more detail to both client and server-side analysis logs, activating DEBUG mode for the scanner, and adding client-side environment variables and system properties to the server-side log of analysis report processing.
-            #-Dsonar.verbose= # optional, default is false
-          # When you need the analysis to take place in a directory other than the one from which it was launched, default is .
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        # Version comes from packageManager in the root manifest.
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "26.3.0"
+          cache: pnpm
+
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test TOON constraints
+        run: pnpm test:toon
+
+      - name: Test with coverage
+        run: pnpm --filter zenith-mcp run test:coverage --coverage.reporter=text --coverage.reporter=lcov
+
+      - name: Resolve coverage source paths
+        # Vitest writes SF paths relative to its package; the scan uses the repo root.
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const repoRoot = process.cwd();
+          const packageRoot = path.join(repoRoot, 'packages/zenith-mcp');
+          const reportPath = path.join(packageRoot, 'coverage/lcov.info');
+          let sourceFiles = 0;
+          const report = fs.readFileSync(reportPath, 'utf8')
+            .split(/\r?\n/)
+            .map(line => {
+              if (!line.startsWith('SF:')) return line;
+              const sourcePath = path.resolve(packageRoot, line.slice(3));
+              const repoPath = path.relative(repoRoot, sourcePath);
+              if (repoPath === '..' || repoPath.startsWith(`..${path.sep}`) ||
+                  path.isAbsolute(repoPath) || !fs.statSync(sourcePath).isFile()) {
+                throw new Error('LCOV source does not resolve to a repository file: ' + line.slice(3));
+              }
+              sourceFiles += 1;
+              return 'SF:' + repoPath.split(path.sep).join('/');
+            })
+            .join('\n');
+          if (sourceFiles === 0) throw new Error('LCOV report contains no source files');
+          fs.writeFileSync(reportPath, report);
+          console.log('Resolved ' + sourceFiles + ' LCOV source paths');
+          NODE
+
+      - name: Analyze with SonarCloud
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
           projectBaseDir: .
+          args: >-
+            -Dsonar.projectKey=itstanner5216_Zenith-MCP
+            -Dsonar.organization=itstanner5216
+            -Dsonar.sources=packages/zenith-mcp/src,packages/zenith-toon/src
+            -Dsonar.tests=packages/zenith-mcp/tests,packages/zenith-toon/tests
+            -Dsonar.javascript.lcov.reportPaths=packages/zenith-mcp/coverage/lcov.info

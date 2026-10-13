@@ -1,6 +1,6 @@
 /**
  * Behavioral tests covering robustness gaps identified in PR #12 review.
- * Tests: roots-utils tilde, symbol-index purge,
+ * Tests: startup directory paths, symbol-index purge,
  * write_file stat errors, directory sensitive filtering, search_file errors,
  * refactor_batch schema strictness, path-validation prefix collisions.
  */
@@ -34,54 +34,62 @@ function captureHandler() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. roots-utils: file:~ and file:~/path resolve to $HOME paths
+// 1. Startup directories: tilde expansion, canonicalization, and validation
 // ─────────────────────────────────────────────────────────────────────────────
-describe('roots-utils — tilde URI forms', () => {
+describe('startup directory paths', () => {
+    let fixture;
+
+    beforeEach(() => {
+        fixture = fs.mkdtempSync(path.join(os.homedir(), 'zenith-startup-path-test-'));
+    });
+
+    afterEach(() => {
+        if (fixture) fs.rmSync(fixture, { recursive: true, force: true });
+        fixture = undefined;
+    });
+
     it('resolves ~ (bare tilde) to home directory', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const result = await getValidRootDirectories([{ uri: '~' }]);
-        expect(result).toContain(home);
+        const { resolveInitialAllowedDirectories, validateDirectories } = await import('../dist/core/server.js');
+        const result = await resolveInitialAllowedDirectories(['~']);
+        expect(result).toEqual([fs.realpathSync(os.homedir())]);
+        await expect(validateDirectories(result)).resolves.toBeUndefined();
     });
 
-    it('resolves ~/existing-subdir to home subdir', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        // Use a subdir that definitely exists under $HOME
-        const entries = fs.readdirSync(home);
-        const subdir = entries.find(e => {
-            try { return fs.statSync(path.join(home, e)).isDirectory(); } catch { return false; }
-        });
-        if (!subdir) return; // skip if home has no subdirs (very unlikely)
-        const result = await getValidRootDirectories([{ uri: `~/${subdir}` }]);
-        expect(result).toContain(path.join(home, subdir));
+    it('resolves ~/existing-subdir to its canonical directory', async () => {
+        const { resolveInitialAllowedDirectories, validateDirectories } = await import('../dist/core/server.js');
+        const subdir = path.join(fixture, 'nested');
+        fs.mkdirSync(subdir);
+        const result = await resolveInitialAllowedDirectories([`~/${path.basename(fixture)}/nested`]);
+        expect(result).toEqual([fs.realpathSync(subdir)]);
+        await expect(validateDirectories(result)).resolves.toBeUndefined();
     });
 
-    it('resolves file:~ to home directory', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const result = await getValidRootDirectories([{ uri: 'file:~' }]);
-        // Should resolve to home, not be empty
-        expect(result.length).toBeGreaterThanOrEqual(1);
-        expect(result[0]).toBe(home);
+    it('canonicalizes and deduplicates tilde directory aliases', async () => {
+        const { resolveInitialAllowedDirectories, validateDirectories } = await import('../dist/core/server.js');
+        const target = path.join(fixture, 'target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(fixture, 'alias'), 'junction');
+        const prefix = `~/${path.basename(fixture)}`;
+        const result = await resolveInitialAllowedDirectories([`${prefix}/target`, `${prefix}/alias`, `${prefix}/target/.`]);
+        expect(result).toEqual([fs.realpathSync(target)]);
+        await expect(validateDirectories(result)).resolves.toBeUndefined();
     });
 
-    it('resolves file:~/existing-subdir to home subdir', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const home = os.homedir();
-        const entries = fs.readdirSync(home);
-        const subdir = entries.find(e => {
-            try { return fs.statSync(path.join(home, e)).isDirectory(); } catch { return false; }
-        });
-        if (!subdir) return;
-        const result = await getValidRootDirectories([{ uri: `file:~/${subdir}` }]);
-        expect(result).toContain(path.join(home, subdir));
+    it('rejects a tilde path naming a regular file during directory validation', async () => {
+        const { resolveInitialAllowedDirectories, validateDirectories } = await import('../dist/core/server.js');
+        const file = path.join(fixture, 'file.txt');
+        fs.writeFileSync(file, 'not a directory');
+        const result = await resolveInitialAllowedDirectories([`~/${path.basename(fixture)}/file.txt`]);
+        expect(result).toEqual([fs.realpathSync(file)]);
+        await expect(validateDirectories(result)).rejects.toThrow(`${result[0]} is not a directory`);
     });
 
-    it('file:~/nonexistent returns empty', async () => {
-        const { getValidRootDirectories } = await import('../dist/core/roots-utils.js');
-        const result = await getValidRootDirectories([{ uri: 'file:~/nonexistent_dir_xyz_9999' }]);
-        expect(result).toHaveLength(0);
+    it('rejects a nonexistent tilde directory instead of silently omitting it', async () => {
+        const { resolveInitialAllowedDirectories, validateDirectories } = await import('../dist/core/server.js');
+        const missing = path.join(fixture, 'does-not-exist');
+        const result = await resolveInitialAllowedDirectories([`~/${path.basename(fixture)}/does-not-exist`]);
+        expect(result).toEqual([missing]);
+        await expect(validateDirectories(result)).rejects.toThrow(`Cannot access directory ${missing}`);
     });
 });
 

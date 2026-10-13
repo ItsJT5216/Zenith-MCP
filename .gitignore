@@ -80,3 +80,6 @@ review/
 *.npmrc
 *.codeqlignore
 *.mcp
+
+# Assembled npm release artifacts (single-package distribution)
+.release/

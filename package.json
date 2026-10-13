@@ -1,6 +1,6 @@
 {
   "name": "zenith",
-  "version": "2026.1.14",
+  "version": "2026.10.8",
   "private": true,
   "description": "Zenith-MCP monorepo",
   "type": "module",
@@ -23,9 +23,9 @@
     "start:http": "pnpm --filter zenith-mcp run start:http",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release:publish": "pnpm publish -r --access public --no-git-checks"
+    "release:publish": "pnpm run release:pack && pnpm run test && pnpm run test:toon && pnpm run release:verify && node scripts/publish-npm-package.mjs --tag latest",
+    "release:pack": "pnpm run clean && pnpm run build && node scripts/stage-npm-package.mjs",
+    "release:verify": "node --test scripts/npm-package.test.mjs && node scripts/verify-npm-package.mjs"
   },
   "devDependencies": {
     "depcheck": "^1.4.7",

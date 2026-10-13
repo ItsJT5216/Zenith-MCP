@@ -1,37 +1,21 @@
-# Changesets
+# Historical Changesets directory
 
-This folder is managed by [Changesets](https://github.com/changesets/changesets).
-It is how version bumps and changelogs are tracked for this monorepo.
+This repository previously used Changesets to version and publish both
+workspace packages. That automation is retired because the public npm
+distribution is ONLY zenith-mcp, with zenith-toon bundled into it.
 
-## How to record a change
+Both workspace packages remain separate for development and testing, but
+zenith-toon must NOT be published independently.
 
-After making a code change that should trigger a release, run:
+To prepare a release, increase the version in both root package.json and
+packages/zenith-mcp/package.json, then run:
 
-```bash
-pnpm changeset
-```
+    pnpm release:publish
 
-The CLI will ask, in plain English:
+This tests both packages, builds them, assembles one npm archive, verifies
+a clean npm installation, and publishes the verified archive under latest.
+An interactive npm 2FA authentication challenge may be required.
 
-1. **Which packages changed** (`zenith-mcp`, `zenith-toon`).
-2. **The bump type** for each:
-   - `patch` – bug fixes / internal changes (e.g. 1.0.0 -> 1.0.1)
-   - `minor` – new backwards-compatible features (e.g. 1.0.0 -> 1.1.0)
-   - `major` – breaking changes (e.g. 1.0.0 -> 2.0.0)
-3. **A short summary** of the change (this becomes the changelog entry).
-
-This writes a small markdown file into `.changeset/`. Commit it alongside your
-code change.
-
-## Applying the versions
-
-When you are ready to release, run:
-
-```bash
-pnpm version-packages
-```
-
-This consumes every pending changeset, bumps the package versions, updates each
-package's `CHANGELOG.md`, and deletes the consumed changeset files. Commit the
-result, then trigger the **Publish to npm** workflow (or publish a GitHub
-Release).
+For CI publishing, run the Publish Zenith-MCP GitHub Actions workflow.
+The release.yml workflow now performs verification only.
+See docs/PUBLISHING.md for detailed instructions.

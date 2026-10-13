@@ -1,167 +1,88 @@
-name: Publish to npm
+name: Publish Zenith-MCP
 
-# Publishes the workspace packages to npm.
-#
-# Two modes are supported:
-#   - stage       -> publishes under the "next" dist-tag (safe staging / pre-release)
-#   - production  -> publishes under the "latest" dist-tag (the default install target)
-#
-# Triggers:
-#   - Manual (workflow_dispatch) with a selectable mode + optional dry-run.
-#   - Automatic on GitHub Release publish -> always a production publish.
-#
-# Authentication: a single repository secret named NPM_TOKEN (an npm "Automation"
-# access token). Granular/classic automation tokens both work.
-
+# Exactly one public npm package; TOON is bundled inside zenith-mcp.
+# Authenticate with an npm trusted publisher (OIDC) or NPM_TOKEN.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Publish mode"
+        description: "Stage under next, or release under latest"
+        type: choice
         required: true
         default: stage
-        type: choice
         options:
           - stage
           - production
-      package:
-        description: "Which package(s) to publish"
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - zenith-mcp
-          - zenith-toon
       dry_run:
-        description: "Run npm publish with --dry-run (no upload)"
-        required: false
-        default: false
+        description: "Preview npm publish without uploading"
         type: boolean
+        required: true
+        default: true
   release:
     types: [published]
 
-# Prevent overlapping publishes from racing each other.
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
+  id-token: write
 
-env:
-  NODE_VERSION: "26"
-  PNPM_VERSION: "11.13.1"
+concurrency:
+  group: npm-zenith-mcp
+  cancel-in-progress: false
 
 jobs:
   publish:
-    name: Publish (${{ github.event_name == 'release' && 'production' || inputs.mode }})
+    name: Verify and publish one Zenith-MCP archive
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Resolve publish parameters
-        id: params
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "mode=production" >> "$GITHUB_OUTPUT"
-            echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
-            echo "package=all" >> "$GITHUB_OUTPUT"
-            echo "dry_run=false" >> "$GITHUB_OUTPUT"
-          else
-            MODE="${{ inputs.mode }}"
-            if [ "$MODE" = "production" ]; then
-              echo "dist_tag=latest" >> "$GITHUB_OUTPUT"
-            else
-              echo "dist_tag=next" >> "$GITHUB_OUTPUT"
-            fi
-            echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-            echo "package=${{ inputs.package }}" >> "$GITHUB_OUTPUT"
-            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup pnpm
+      - name: Set up pnpm
+        # Auto-detect pnpm version from root packageManager, no competing pin.
         uses: pnpm/action-setup@v6
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: Setup Node.js
+      - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: "https://registry.npmjs.org"
+          node-version: "26"
+          registry-url: https://registry.npmjs.org
           cache: pnpm
-
+      - name: Enable current npm OIDC dist-tag support
+        run: npm install --global npm@12.2.0
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Build
         run: pnpm run build
-
-      - name: Test
-        run: pnpm run test
-
-      - name: Publish packages
+      - name: Test both internal workspaces
+        run: |
+          pnpm run test
+          pnpm run test:toon
+      - name: Prepare single-package archive
+        run: node scripts/stage-npm-package.mjs
+      - name: Verify clean npm install
+        run: pnpm run release:verify
+      - name: Publish or preview
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          MODE: ${{ steps.params.outputs.mode }}
-          DIST_TAG: ${{ steps.params.outputs.dist_tag }}
-          PACKAGE: ${{ steps.params.outputs.package }}
-          DRY_RUN: ${{ steps.params.outputs.dry_run }}
         run: |
-          set -euo pipefail
-
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_TOKEN secret is not set. Add it under Settings -> Secrets and variables -> Actions." >&2
-            exit 1
-          fi
-
-          echo "Mode:      $MODE"
-          echo "Dist-tag:  $DIST_TAG"
-          echo "Package:   $PACKAGE"
-          echo "Dry run:   $DRY_RUN"
-
-          PUBLISH_ARGS="--access public --tag $DIST_TAG --no-git-checks"
-          if [ "$DRY_RUN" = "true" ]; then
-            PUBLISH_ARGS="$PUBLISH_ARGS --dry-run"
-          fi
-
-          # zenith-toon must publish before zenith-mcp (which depends on it).
-          publish_one() {
-            local dir="$1"
-            echo "::group::Publishing $dir"
-            ( cd "$dir" && pnpm publish $PUBLISH_ARGS )
-            echo "::endgroup::"
-          }
-
-          case "$PACKAGE" in
-            zenith-toon)
-              publish_one packages/zenith-toon
-              ;;
-            zenith-mcp)
-              publish_one packages/zenith-mcp
-              ;;
-            all)
-              publish_one packages/zenith-toon
-              publish_one packages/zenith-mcp
-              ;;
-            *)
-              echo "Unknown package: $PACKAGE" >&2
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            MODE=production
+            DRY_RUN=false
+            TAG_NAME=$(node -p "JSON.parse(require('node:fs').readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).release.tag_name")
+            PACKAGE_VERSION=$(node -p "require('./packages/zenith-mcp/package.json').version")
+            if [ "$TAG_NAME" != "$PACKAGE_VERSION" ] && [ "$TAG_NAME" != "v$PACKAGE_VERSION" ]; then
+              echo "Release tag must match npm version ($PACKAGE_VERSION or v$PACKAGE_VERSION)." >&2
               exit 1
-              ;;
+            fi
+          else
+            MODE=$(node -p "JSON.parse(require('node:fs').readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).inputs.mode")
+            DRY_RUN=$(node -p "JSON.parse(require('node:fs').readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).inputs.dry_run")
+          fi
+          case "$MODE" in
+            production) DIST_TAG=latest ;;
+            stage) DIST_TAG=next ;;
+            *) echo "Unexpected publish mode: $MODE" >&2; exit 1 ;;
           esac
-
-      - name: Summary
-        if: always()
-        run: |
-          {
-            echo "### npm Publish"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Mode | ${{ steps.params.outputs.mode }} |"
-            echo "| Dist-tag | ${{ steps.params.outputs.dist_tag }} |"
-            echo "| Package | ${{ steps.params.outputs.package }} |"
-            echo "| Dry run | ${{ steps.params.outputs.dry_run }} |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DRY_RUN" = "true" ]; then
+            node scripts/publish-npm-package.mjs --tag "$DIST_TAG" --dry-run
+          else
+            node scripts/publish-npm-package.mjs --tag "$DIST_TAG"
+          fi

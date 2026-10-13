@@ -1,15 +1,15 @@
 {
   "name": "zenith-mcp",
-  "version": "2026.1.14",
+  "version": "2026.10.8",
   "description": "Zenith-MCP filesystem server",
   "license": "MIT",
   "mcpName": "com.itstanner5216/zenith-mcp",
   "author": "Tanner",
-  "homepage": "https://github.com/itstanner5216/Zenith-MCP",
-  "bugs": "https://github.com/itstanner5216/Zenith-MCP/issues",
+  "homepage": "https://github.com/ItsJT5216/Zenith-MCP",
+  "bugs": "https://github.com/ItsJT5216/Zenith-MCP/issues",
   "repository": {
     "type": "git",
-    "url": "https://github.com/itstanner5216/Zenith-MCP.git"
+    "url": "git+https://github.com/ItsJT5216/Zenith-MCP.git"
   },
   "type": "module",
   "bin": {

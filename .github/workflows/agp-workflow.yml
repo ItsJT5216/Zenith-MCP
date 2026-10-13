@@ -79,7 +79,7 @@ jobs:
       directive: ${{ steps.gate.outputs.directive }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
       - name: Sonatype Guide gate
         id: gate
         uses: sonatype/agp-action/gate@v1
@@ -97,7 +97,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Fetch governed configuration
         # GitHub jobs run separately and don't share files, so fetch the governed configuration

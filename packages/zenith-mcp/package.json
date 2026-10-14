@@ -55,10 +55,10 @@
     "@types/emscripten": "^1.41.6",
     "@types/express": "^5.0.6",
     "@types/node": "^26.4.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.3",
     "shx": "^0.4.0",
     "tree-sitter-cli": "^0.27.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.3"
   }
 }

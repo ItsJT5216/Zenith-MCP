@@ -37,7 +37,7 @@
     "@cfworker/json-schema": "^4.1.1",
     "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.0",
     "diff": "^9.0.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",

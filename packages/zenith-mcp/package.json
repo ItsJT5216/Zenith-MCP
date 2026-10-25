@@ -50,7 +50,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/emscripten": "^1.41.6",
     "@types/express": "^5.0.6",

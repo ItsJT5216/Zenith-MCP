@@ -173,7 +173,7 @@ By default the allowed directories are project-context hints and do not restrict
 ### How It Works
 1. **Server Startup** — the CLI directories are resolved, validated and recorded
 2. **Sandbox** — with `Sandbox: enabled`, all filesystem tool operations are restricted to those directories; symlinks are resolved and validated. With the default (`disabled`) they are project-context hints only
-3. **`bash`** — the [`bash`](#bash) tool is the one exception: the sandbox confines only its working directory, and the command itself runs with the server's privileges
+3. **`bash`** — the [`bash`](#bash) tool is the one exception: the sandbox confines only its `cwd`, and the command itself runs with the server's privileges
 
 ---
 
@@ -303,13 +303,13 @@ Cross-file symbol refactoring with impact analysis and version rollback.
 ### `bash`
 Run a bash command and get a terminal-style transcript.
 - `command` (string) — run with `bash -c`
+- `cwd` (string, optional) — validated working directory; defaults to the project root, else the first allowed directory, else the server's working directory. An explicit `cwd` is path evidence: it rebinds project detection exactly like a file tool's path
 - `timeout` (integer seconds ≥ 1, optional) — defaults to `bash_timeout_seconds` (120); anything above `bash_max_timeout_seconds` (600) is clamped to that cap
-- The command runs in the caller's current working directory — where the launcher shell or MCP client is working, which is also where the file tools resolve relative paths; to work elsewhere, use absolute paths in the command. With the sandbox enabled, a working directory outside the allowed directories is refused with the reason: `Cannot run in the caller's working directory <dir>: Access denied: <dir> is outside allowed directories`
-- The allowed-directory sandbox confines only the working directory. The command runs with the server's own privileges and can reach anything the server process can; `bash: disabled` under `### Tools` turns the tool off where that is not acceptable
-- Output is a transcript: `<cwd>$ <command>` on the first line (`<cwd>` is the directory the command ran in), then stdout and stderr merged in arrival order and rendered as a terminal shows them (ANSI stripped; `\r`, backspace, erase-line and cursor-to-column replayed per line; control-string payloads such as titles and hyperlinks dropped), then a status line — `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (nothing ran). `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening
+- The allowed-directory sandbox confines only `cwd`. The command runs with the server's own privileges and can reach anything the server process can; `bash: disabled` under `### Tools` turns the tool off where that is not acceptable
+- Output is a transcript: `<cwd>$ <command>` on the first line, then stdout and stderr merged in arrival order and rendered as a terminal shows them (ANSI stripped; `\r`, backspace, erase-line and cursor-to-column replayed per line; control-string payloads such as titles and hyperlinks dropped), then a status line — `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (nothing ran). `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening
 - On timeout, or when the client cancels the request, the command's process group gets SIGTERM, then SIGKILL after 2 s (Windows: `taskkill /T /F`); the output captured so far is still returned. A job the command moved to its own group (`set -m`) is not reached. Commands still running when the server exits or receives SIGTERM/SIGINT/SIGHUP are swept; a process that outlives its command (a detached service) is not
 - Output is returned in full. stdin is closed — start services detached with output redirected
-- A non-zero exit is reported as data on the status line, not as an error; the error channel is only for the tool itself failing (a refused working directory, bash missing, spawn failure)
+- A non-zero exit is reported as data on the status line, not as an error; the error channel is only for the tool itself failing (bad `cwd`, bash missing, spawn failure)
 
 ---
 

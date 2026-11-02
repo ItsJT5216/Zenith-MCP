@@ -144,8 +144,8 @@ export function registerEnabledTools(toolServer: ToolServer, ctx: ToolContext): 
 
   // ── Register only the tools that are enabled in config ───────────────
   // Every handler is wrapped with the caller-environment ping: a server-side,
-  // model-free detection signal (process-tree cwds, TTL-cached, upgrade-from-
-  // global only). Tool schemas are untouched — the model carries ZERO
+  // model-free detection signal, refreshed for each invocation. Tool schemas
+  // are untouched — the model carries ZERO
   // responsibility for project detection, by design.
   const pingedServer = withCallerEnvironmentPing(toolServer, ctx);
   for (const entry of TOOL_REGISTRY) {
@@ -157,10 +157,9 @@ export function registerEnabledTools(toolServer: ToolServer, ctx: ToolContext): 
 
 /**
  * Wrap a ToolServer so every tool call pings ProjectContext with caller
- * environment evidence before the real handler runs. The walk is throttled
- * (TTL cache inside the process-tree reader) and the ping is a no-op unless
- * the session is currently in global fallback — path evidence, registry
- * matches, and explicit bindings always outrank environment inference.
+ * environment evidence before the real handler runs. A call-local binding
+ * and cwd snapshot then follow its async work, so overlapping calls cannot
+ * change each other's relative paths or operation-specific database routing.
  *
  * The ping must NEVER break a tool call: detection failures are swallowed.
  */
@@ -172,12 +171,14 @@ export function withCallerEnvironmentPing(toolServer: ToolServer, ctx: ToolConte
       handler: (args: TArgs, extra?: ToolCallExtra) => ReturnType<Parameters<ToolServer['registerTool']>[2]>
     ): void {
       toolServer.registerTool<TArgs>(name, registration, (args: TArgs, extra?: ToolCallExtra) => {
+        let project: ReturnType<typeof getProjectContext> | undefined;
         try {
-          getProjectContext(ctx).pingCallerEnvironment();
+          project = getProjectContext(ctx);
+          project.pingCallerEnvironment();
         } catch {
           // Detection is best-effort by contract — never fail a tool call.
         }
-        return handler(args, extra);
+        return project ? project.runForCall(() => handler(args, extra)) : handler(args, extra);
       });
     },
   };

@@ -150,7 +150,7 @@ Validation flow:
 
 If validation fails, the tool must fail before touching the filesystem.
 
-The [`bash`](#bash) tool is the one exception: `ctx.validatePath()` gates only its working directory. The command runs with the server's privileges and is not confined to the allowed directories.
+The [`bash`](#bash) tool is the one exception: `ctx.validatePath()` gates only its `cwd`. The command runs with the server's privileges and is not confined to the allowed directories.
 
 ### Sensitive File Filtering
 
@@ -325,7 +325,7 @@ Keep stash responses concise. Return the stash ID and only the failed edit indic
 | `file_manager` | mkdir/delete/move/info | `mode`, `path`, `source`, `destination` |
 | `stashRestore` | Retry/inspect/clear stashed edit/write failures | `mode: apply/restore/list/read`, `stashId`, `corrections`, `newPath`, `dryRun`, `type` |
 | `refactor_batch` | Cross-file symbol refactoring and symbol version rollback | `mode: query/loadDiff/apply/reapply/restore/history` |
-| `bash` | Run a bash command in the caller's working directory; terminal-style transcript, exit code reported as data | `command`, `timeout` |
+| `bash` | Run a bash command; terminal-style transcript, exit code reported as data | `command`, `cwd`, `timeout` |
 
 ### Tool Notes
 
@@ -408,16 +408,15 @@ Runs `bash -c <command>` and returns a terminal-style transcript.
 
 - First line is the prompt: `<cwd>$ <command>`.
 - Last line is the status: `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started. `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening.
-- A non-zero exit is data on the status line, not a tool error. The error channel is only for the tool itself failing: a refused working directory, `bash not found.`, spawn failure.
+- A non-zero exit is data on the status line, not a tool error. The error channel is only for the tool itself failing: invalid `cwd`, `bash not found.`, spawn failure.
 - `timeout` defaults to `bash_timeout_seconds` (120) and is clamped to `bash_max_timeout_seconds` (600); both live under `### Advanced`.
 - Output is returned in full, rendered as it arrives the way a terminal shows it: `\r`, backspace, erase-in-line and cursor-to-column are modelled per line (cells are code points, so a tab or a wide character is one cell); colours and other sequences, control strings (OSC/DCS/SOS/PM/APC, newlines included) and stray control bytes are removed.
 - stdin is closed. Start services detached with output redirected.
 - On timeout, or when the client cancels the request (the SDK's `extra.signal`, forwarded to every handler by `withCallerEnvironmentPing`), the command's process group gets SIGTERM, then SIGKILL after 2 s (Windows: `taskkill /T /F`); captured output is still returned. The call completes only once the group is gone or the SIGKILL is out, so a descendant in the group that ignores SIGTERM is still killed; a job moved to its own group (`set -m`) is not reached.
 - Commands still running are swept (SIGKILL to the group) when the server exits or receives SIGTERM/SIGINT/SIGHUP; the listener runs first and re-raises the signal with its default disposition only when it is the sole listener. A process that outlives its command (a detached service) is not tracked or swept.
 - Cursor motion in the output never creates cells — a move past the end of the line lands at the end — so no escape parameter can make the renderer allocate.
-- The command runs in the caller's working directory — `core/caller-cwd.ts`: the nearest ancestor process whose cwd is readable (the launcher shell, or the MCP client on stdio), else the server's own. There is no working-directory parameter; to work elsewhere, the command uses absolute paths. With the sandbox enabled, a working directory outside the allowed directories is refused with the reason: `Cannot run in the caller's working directory <dir>: Access denied: <dir> is outside allowed directories`.
-- The working directory is not project evidence: it never changes what `ProjectContext` is bound to. `bash` imports nothing from `core/project-context`, and the caller-environment ping that wraps every tool reads process ancestry, never arguments.
-- The allowed-directory sandbox gates only the working directory. The command runs with the server's privileges and can reach anything the server process can.
+- An explicit `cwd` is path evidence: it rebinds project detection exactly like a file tool's path.
+- The allowed-directory sandbox gates only `cwd`. The command runs with the server's privileges and can reach anything the server process can.
 
 Enabled by default like every tool; `bash: disabled` under `### Tools` turns it off.
 

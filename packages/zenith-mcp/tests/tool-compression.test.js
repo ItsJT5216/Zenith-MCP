@@ -94,9 +94,13 @@ describe('tool compression behavior', () => {
         await writeFixture(rootDir, 'two.js', 'export const two = 2;\n'.repeat(50));
 
         // compressForTool returns a string directly (not { text: ... })
-        compressForToolMock
-            .mockResolvedValueOnce('ONE_COMPRESSED')
-            .mockResolvedValueOnce('TWO_COMPRESSED');
+        // Reads run concurrently; the mock must follow file identity, not the
+        // nondeterministic order in which filesystem promises complete.
+        compressForToolMock.mockImplementation(async (filePath) => {
+            if (path.basename(filePath) === 'one.js') return 'ONE_COMPRESSED';
+            if (path.basename(filePath) === 'two.js') return 'TWO_COMPRESSED';
+            throw new Error(`Unexpected compression input: ${filePath}`);
+        });
 
         const handler = await registerTool('../dist/tools/read_multiple_files.js', 'read_multiple_files', rootDir);
         const compressed = await handler({ paths: ['one.js', 'two.js'] });

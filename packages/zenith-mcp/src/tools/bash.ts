@@ -1,9 +1,10 @@
 import { z } from "zod";
+import fs from "fs/promises";
 import { accessSync, statSync, constants as fsConstants } from "fs";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import path from "path";
 import { getBashTimeoutSeconds, getBashMaxTimeoutSeconds } from '../core/shared.js';
-import { getCallerWorkingDirectory } from '../core/caller-cwd.js';
+import { getProjectContext } from '../core/project-context.js';
 import type { ToolServer, ToolContext, ToolCallExtra } from './types.js';
 import { errorMessage } from './types.js';
 
@@ -20,6 +21,7 @@ const TEXT_BATCH_PIECES = 1024;
 
 interface BashArgs {
     command: string;
+    cwd?: string;
     timeout?: number;
 }
 
@@ -446,9 +448,10 @@ class TerminalRenderer {
 export function register(server: ToolServer, ctx: ToolContext): void {
     server.registerTool("bash", {
         title: "Bash",
-        description: "Run a bash command in your current working directory; to work elsewhere, use absolute paths. Returns a terminal transcript: a prompt line (<cwd>$ <command>), stdout and stderr merged with ANSI stripped, and a status line with the exit code. Output is returned in full. stdin is closed; start services detached with output redirected.",
+        description: "Run a bash command. Returns a terminal transcript: a prompt line (<cwd>$ <command>), stdout and stderr merged with ANSI stripped, and a status line with the exit code. Output is returned in full. stdin is closed; start services detached with output redirected.",
         inputSchema: z.object({
             command: z.string().min(1).describe("Command to run."),
+            cwd: z.string().optional().describe("Working directory. Defaults to the project root, else the first allowed directory, else the server's working directory."),
             timeout: z.number().int().min(1).optional().describe("Seconds. Default and cap come from config (bash_timeout_seconds, bash_max_timeout_seconds)."),
         }).strict(),
         annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true }
@@ -456,22 +459,23 @@ export function register(server: ToolServer, ctx: ToolContext): void {
         if (args.command.includes('\0')) throw new Error('Command contains null byte.');
         const signal = extra?.signal;
 
-        // The command runs where the caller is working (core/caller-cwd.ts): the
-        // nearest ancestor process's cwd — the launcher shell, or the MCP client on
-        // stdio — realpath'd and stat'd as a directory by the walk. It is the same
-        // base a relative path resolves against, so bash and the file tools can
-        // never disagree about where a relative path lands. There is no cwd
-        // parameter: to work elsewhere, the command uses absolute paths. validatePath
-        // applies the sandbox policy, when one is enabled, exactly as it does to
-        // every other tool's path — a working directory outside the boundary is
-        // refused, not redirected, and the refusal names the directory and why,
-        // since the caller chose nothing. A directory that vanishes between the walk
-        // and the spawn surfaces from the spawn itself (see the 'error' handler).
-        // The working directory decides where the command runs and nothing else.
-        const callerCwd = getCallerWorkingDirectory();
-        const cwd = await ctx.validatePath(callerCwd).catch((err: unknown) => {
-            throw new Error(`Cannot run in the caller's working directory ${callerCwd}: ${errorMessage(err)}`);
+        // An explicit cwd is path evidence for project detection exactly like a
+        // file tool's path. The default never refuses for want of a root: project
+        // root (any tier) → first allowed directory → this process's own cwd.
+        // validatePath then applies the sandbox policy, when one is enabled, to
+        // that directory exactly as it does to every other tool's path.
+        const pc = getProjectContext(ctx);
+        const cwd = args.cwd !== undefined
+            ? await ctx.validatePath(args.cwd)
+            : await ctx.validatePath(pc.getRoot() ?? ctx.getAllowedDirectories()[0] ?? process.cwd());
+        // validatePath resolves a missing target to an absolute path whenever its
+        // parent exists, so existence and kind are established here.
+        const cwdStat = await fs.stat(cwd).catch((err: unknown) => {
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Working directory not found.');
+            throw err;
         });
+        if (!cwdStat.isDirectory()) throw new Error('Not a directory.');
+        if (args.cwd !== undefined) pc.getRoot(cwd);
 
         const timeoutS = Math.min(args.timeout ?? getBashTimeoutSeconds(), getBashMaxTimeoutSeconds());
         const shell = resolveBashPath();
@@ -649,9 +653,8 @@ export function register(server: ToolServer, ctx: ToolContext): void {
                         fail(new Error(`Spawn failed: ${errorMessage(err)}`));
                         return;
                     }
-                    // Node reports a working directory that vanished since the walk stat'd it
-                    // with the same code as a shell that cannot be executed; the directory
-                    // itself tells them apart.
+                    // Node reports a cwd that vanished after the stat with the same code as
+                    // a shell that cannot be executed; the directory itself tells them apart.
                     try {
                         statSync(cwd);
                     } catch {

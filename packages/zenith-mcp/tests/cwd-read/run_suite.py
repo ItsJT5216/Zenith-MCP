@@ -22,9 +22,7 @@ import harness as H
 import verifiers as V
 import matrix as M
 
-BASE = H.BASE
-SCRATCH = os.path.join(BASE, "agents", "prism")
-FIXTURES = os.environ.get("PRISM_FIXTURES", os.path.join(SCRATCH, "fixtures"))
+FIXTURES = os.environ.get("PRISM_FIXTURES", H.DEFAULT_FIXTURES)
 
 SETTLE_POST_TTL = 6.2   # > 5s caller-cwd TTL (detection/process-tree.ts)
 
@@ -165,9 +163,11 @@ def run_concurrent(args, manifest, rec, transports):
         H.write_isolated_config(homeB, port=portB or 7099)
         cwdA = os.path.realpath(os.path.join(FIXTURES, "proj-alpha"))
         cwdB = os.path.realpath(os.path.join(FIXTURES, "proj-beta"))
-        srvA = H.ServerHandle(args.repo_root, transport, homeA, f"conc-A-{transport}", cwdA, token=tokenA, port=portA).start()
-        srvB = H.ServerHandle(args.repo_root, transport, homeB, f"conc-B-{transport}", cwdB, token=tokenB, port=portB).start()
+        srvA = H.ServerHandle(args.repo_root, transport, homeA, f"conc-A-{transport}", cwdA, token=tokenA, port=portA)
+        srvB = H.ServerHandle(args.repo_root, transport, homeB, f"conc-B-{transport}", cwdB, token=tokenB, port=portB)
         try:
+            srvA.start()
+            srvB.start()  # inside the try: a failing B start must still stop A
             if transport == "stdio":
                 for s in (srvA, srvB):
                     s.rpc("initialize", {"protocolVersion": H.PROTO_LEGACY, "capabilities": {},
@@ -218,27 +218,30 @@ def run_error_recovery(args, manifest, rec, transports):
             # 1) schema rejection (missing required path)
             seq += 1
             t0 = time.time(); bad = srv.call_tool("read_file", {}); dt = time.time() - t0
-            is_err = (bad.get("_transport_error")) or ("error" in bad) or bad.get("result", {}).get("isError")
+            # A transport failure (timeout/EOF) is NOT a rejection by the server.
+            transport_err = bad.get("_transport_error")
+            is_err = (not transport_err) and (("error" in bad) or bad.get("result", {}).get("isError"))
             rec.add(run_id=args.run_id, tool="read_file", mode="error-schema-reject", transport=transport,
                     server_instance=srv.tag, seq_index=seq, phase="error-recovery", ttl_boundary="n/a",
                     settle_seconds=0, elapsed_ms=round(dt*1000, 2), evidence_topology="error-recovery",
                     parent_proc_cwd=os.getcwd(), server_proc_cwd=srv.server_proc_cwd(),
                     expected_active_root=cwd, expected_project="proj-alpha",
                     expected_relative_args={}, observed_project=None,
-                    status=("pass" if is_err else "operation-error"),
-                    reason="schema-rejection-returned" if is_err else "schema-not-rejected")
+                    status=("harness-error" if transport_err else "pass" if is_err else "operation-error"),
+                    reason=transport_err or ("schema-rejection-returned" if is_err else "schema-not-rejected"))
             # 2) missing path read (operational error, not a crash)
             seq += 1
             t0 = time.time(); miss = srv.call_tool("read_file", {"path": "does/not/exist.txt"}); dt = time.time() - t0
-            miss_err = (miss.get("_transport_error")) or ("error" in miss) or miss.get("result", {}).get("isError")
+            transport_miss = miss.get("_transport_error")
+            miss_err = (not transport_miss) and (("error" in miss) or miss.get("result", {}).get("isError"))
             rec.add(run_id=args.run_id, tool="read_file", mode="error-missing-path", transport=transport,
                     server_instance=srv.tag, seq_index=seq, phase="error-recovery", ttl_boundary="n/a",
                     settle_seconds=0, elapsed_ms=round(dt*1000, 2), evidence_topology="error-recovery",
                     parent_proc_cwd=os.getcwd(), server_proc_cwd=srv.server_proc_cwd(),
                     expected_active_root=cwd, expected_project="proj-alpha",
                     expected_relative_args={"path": "does/not/exist.txt"}, observed_project=None,
-                    status=("pass" if miss_err else "operation-error"),
-                    reason="missing-path-errored" if miss_err else "missing-path-not-errored")
+                    status=("harness-error" if transport_miss else "pass" if miss_err else "operation-error"),
+                    reason=transport_miss or ("missing-path-errored" if miss_err else "missing-path-not-errored"))
             # 3) valid call afterwards still works (recovery)
             seq += 1
             argspec, verifier = V.make_read_file("marker.txt")
@@ -340,7 +343,11 @@ def run_special_topologies(args, manifest, rec, transports):
             space_tok = manifest["proj-sp ace"]["token"]
             t0 = time.time(); rpc = srv.call_tool("read_file", {"path": linkrel}); dt = time.time() - t0
             text = H.extract_text(rpc) or ""
-            if rpc.get("_transport_error"):
+            if not os.path.islink(os.path.join(FIXTURES, "link-to-space")):
+                # build_fixtures.py could not create the symlink (filesystem
+                # limitation) — an environment gap, not a product failure.
+                st, rs = "unsupported", "symlink-unavailable"
+            elif rpc.get("_transport_error"):
                 st, rs = "harness-error", rpc["_transport_error"]
             elif "error" in rpc or rpc.get("result", {}).get("isError"):
                 st, rs = "operation-error", "symlink-read-error"
@@ -388,8 +395,9 @@ dir: an in-sandbox read must succeed and an out-of-sandbox read (proj-beta) must
         else:
             srv.proc = _sp.Popen([H.NODE, srv.http_js, alpha, "--host=127.0.0.1", f"--port={port}"],
                                  cwd=alpha, env=env, stdin=_sp.DEVNULL, stdout=srv._of, stderr=srv._ef)
-            srv._wait_health()
         try:
+            if transport == "http":
+                srv._wait_health()  # inside the try so a health failure still reaches srv.stop()
             if transport == "stdio":
                 srv.rpc("initialize", {"protocolVersion": H.PROTO_LEGACY, "capabilities": {},
                                        "clientInfo": {"name": "prism", "version": "0"}}, modern=False)
@@ -412,7 +420,9 @@ dir: an in-sandbox read must succeed and an out-of-sandbox read (proj-beta) must
             seq += 1
             t0 = time.time(); oob = srv.call_tool("read_file", {"path": os.path.join(beta, "marker.txt")}); dt = time.time() - t0
             oob_text = (H.extract_text(oob) or "") + json.dumps(oob.get("error", {}))
-            denied = ("Access denied" in oob_text) or ("error" in oob) or oob.get("result", {}).get("isError")
+            # Only the sandbox's own refusal proves the boundary; an unrelated
+            # error (ENOENT, schema, transport) must not pass as enforcement.
+            denied = "Access denied" in oob_text
             # Confirm we did NOT actually read beta's content
             leaked_beta = manifest["proj-beta"]["token"] in oob_text
             rec.add(run_id=args.run_id, tool="read_file", mode="sandbox-out-of-bounds", transport=transport,
@@ -453,7 +463,7 @@ def run_http_independent_client(args, manifest, rec):
         # An independent requester process with a controllable cwd. It is a child
         # of THIS harness process, not of the server, so its cwd is invisible to
         # the server's ancestor walk. We hold the server ancestry fixed.
-        requester = os.path.join(SCRATCH, "independent_requester.py")
+        requester = os.path.join(H.HERE, "independent_requester.py")
         for req_proj in ("proj-alpha", "proj-beta"):
             req_cwd = os.path.realpath(os.path.join(FIXTURES, req_proj))
             seq += 1
@@ -468,9 +478,15 @@ def run_http_independent_client(args, manifest, rec):
             try:
                 with open(outp) as f:
                     got = json.load(f)
-            except Exception:
+            except (OSError, ValueError):
+                # No/unreadable output means the REQUESTER failed, not the server.
+                # Raised as a harness error below instead of being recorded as a
+                # 'wrong-root' product result with observed=None.
                 pass
-            text = (got or {}).get("text", "")
+            if got is None:
+                raise RuntimeError(
+                    f"independent requester wrote no output (rc={r.returncode}): {r.stderr.strip()}")
+            text = got.get("text", "")
             # The served content should be the SERVER's launch project (alpha),
             # independent of the requester's cwd. observed = which token returned.
             observed = None

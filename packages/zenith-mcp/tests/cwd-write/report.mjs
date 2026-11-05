@@ -60,6 +60,14 @@ export class Recorder {
       labels: ev.labels ?? [],                  // e.g. ['override-control','seam','persistence-consent']
     };
     this.records.push(rec);
+    // CodeQL js/http-to-file-access ("Network data written to file") flags this
+    // write: over the HTTP transport `resultText` is the server's response body,
+    // and recording it verbatim IS this file's purpose — it is the evidence log.
+    // Bounded by construction: the record is the fixed, whitelisted shape built
+    // above (no response-controlled keys), the server text is truncated to 4000
+    // chars, JSON.stringify yields exactly one escaped line per record, and the
+    // path is harness-owned (<out-dir>/<label>.events.jsonl, never taken from a
+    // response). Accepted as an intentional test-harness sink.
     fs.writeSync(this.fd, JSON.stringify(rec) + '\n');
     return rec;
   }

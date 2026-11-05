@@ -20,14 +20,20 @@
 // launcher cwd we set (resolved to its realpath + its detected boundary by
 // walking for .git / markers ourselves), never from the server's answer.
 // ============================================================================
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
-export const NODE_BIN = '/home/tanner/Projects/Zenith-Worktrees/bash/tooling/node-v26.3.0-linux-x64/bin/node';
+// Node binary for the servers under test: $ZENITH_NODE when set, else the Node
+// running this harness. A non-executable ZENITH_NODE fails here, before any spawn.
+export function resolveNodeBin(env = process.env) {
+  const bin = env.ZENITH_NODE || process.execPath;
+  try { fs.accessSync(bin, fs.constants.X_OK); }
+  catch { throw new Error(`cwd-write: Node binary is not executable: ${bin} (set ZENITH_NODE to a Node binary, or unset it to use ${process.execPath})`); }
+  return bin;
+}
+export const NODE_BIN = resolveNodeBin();
 
 // The marker set mirrors core/detection/boundaries.ts PROJECT_MARKERS — used
 // ONLY to compute the independent expected boundary for a fixture dir, never

@@ -2,6 +2,10 @@ import { beforeEach, afterEach, describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setup } from './cwd-context-test-support.mjs';
+// getCallerCwds() defaults to a 0 ms TTL only on Linux (/proc walk); macOS keeps
+// the 5 s cache and Windows returns its own cwd only, so the refresh check below
+// is Linux-specific by construction (same gate as bash.test.js).
+const linuxOnly = it.skipIf(process.platform !== 'linux');
 let h;
 beforeEach(async () => { h = await setup(); });
 afterEach(() => h.cleanup());
@@ -53,7 +57,7 @@ describe('continued discovery on one real ProjectContext (unit observation injec
     fs.rmdirSync(path.join(inner, '.git'));
     pc.pingCallerEnvironment(); expect(pc.getRoot()).toBe(outer);
   });
-  it('Linux default candidate refresh does not return a stale cached array', () => {
+  linuxOnly('Linux default candidate refresh does not return a stale cached array', () => {
     const first = h.pt.getCallerCwds(); h.move(h.roots.B);
     const second = h.pt.getCallerCwds();
     expect(second[0].cwd).toBe(h.roots.B); expect(second).not.toBe(first);

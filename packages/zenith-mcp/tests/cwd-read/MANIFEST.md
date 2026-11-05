@@ -46,7 +46,7 @@ launch directory, across:
 - `README.md`               — how to run + how to read results
 
 The heavy lifting (server spawning, ground-truth capture, the per-tool matrix)
-lives in the author's scratch at `agents/prism/` (`harness.py`, `matrix.py`,
+lives beside `run.py` in this directory (`harness.py`, `matrix.py`,
 `verifiers.py`, `run_suite.py`, `build_fixtures.py`). `run.py` forwards to it so
 the SAME assertions run against the frozen baseline and the final build.
 

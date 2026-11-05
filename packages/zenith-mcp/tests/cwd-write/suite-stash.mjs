@@ -151,11 +151,45 @@ export async function runStashSuite(server, F, rec, cov, ctx) {
       } });
   } else { cov.planned(T, transport, 1); rec.record({ tool: T, mode: 'apply', transport, serverInstance: inst, phase: A.phase, status: 'unsupported', assertionReason: 'no dryRun stash id', labels: ['setup-failure'] }); cov.observe(T, transport, rec.records[rec.records.length - 1]); }
 
-  // list with a type filter (write vs edit) and a range
-  cov.planned(T, transport, 1);
-  await invoke(A, { mode: 'list', type: 'edit', range: 5 }, {
-    expectedProject: 'A', labels: ['list', 'type-filter', 'range'],
-    verify: (r) => ({ ok: typeof r.text === 'string', reason: 'list with type+range returned' }) });
+  // Force a real write-type stash NOW (before the type-filter check, which needs
+  // both types live): writing ONTO an existing DIRECTORY fails at rename (EISDIR)
+  // and the tool caches the content via stashWrite. Applied further below.
+  const badTarget = path.join(F.A, 'src'); // an existing directory
+  const wr = await server.callTool('write_file', { path: badTarget, content: 'write-stash-content\n' });
+  const writeId = /stash:(\d+)/.exec(wr.text || '')?.[1] ? Number(/stash:(\d+)/.exec(wr.text || '')[1]) : null;
+
+  // list with a type filter (write vs edit) and a range. The live entries are
+  // the dryRun edit stash (dryId) and the write stash (writeId). Control first:
+  // an UNFILTERED list must show both types, otherwise an ignored filter would
+  // be indistinguishable from a correct one; then type=edit must drop [write].
+  const unsupported = (mode, why) => {
+    rec.record({ tool: T, mode, transport, serverInstance: inst, phase: A.phase, status: 'unsupported', assertionReason: why, labels: ['type-filter', 'setup-failure'] });
+    cov.observe(T, transport, rec.records[rec.records.length - 1]);
+  };
+  cov.planned(T, transport, 2);
+  let bothTypesListed = false;
+  if (dryId != null && writeId != null) {
+    await invoke(A, { mode: 'list', range: 5 }, {
+      expectedProject: 'A', labels: ['list', 'type-filter-control', 'range'],
+      verify: (r) => {
+        const t = r.text || '';
+        bothTypesListed = t.includes('[edit]') && t.includes('[write]');
+        return { ok: bothTypesListed, reason: bothTypesListed ? 'unfiltered list shows both [edit] and [write]' : `unfiltered list lacks a type: ${t.slice(0, 120)}` };
+      } });
+  } else {
+    unsupported('list', `no live edit+write stash pair to filter (edit #${dryId}, write #${writeId})`);
+  }
+  if (bothTypesListed) {
+    await invoke(A, { mode: 'list', type: 'edit', range: 5 }, {
+      expectedProject: 'A', labels: ['list', 'type-filter', 'range'],
+      verify: (r) => {
+        const t = r.text || '';
+        const ok = t.includes('[edit]') && !t.includes('[write]');
+        return { ok, reason: ok ? 'type=edit list kept [edit] and excluded [write]' : `type filter ignored or empty: ${t.slice(0, 120)}` };
+      } });
+  } else {
+    unsupported('list', 'type-filter check skipped: unfiltered control did not show both [edit] and [write]');
+  }
 
   // relative `file` routing hint vs omitted hint — distinct cases.
   // Relative file: 'edit.txt' relative to the SERVER's launch cwd. Recorded as
@@ -165,14 +199,8 @@ export async function runStashSuite(server, F, rec, cov, ctx) {
     expectedProject: 'A', labels: ['list', 'relative-routing-hint'],
     verify: (r) => ({ ok: typeof r.text === 'string', reason: 'list with relative file hint returned (routing-hint, not a root oracle)' }) });
 
-  // apply a write-type stash with a newPath redirect (distinct routing case)
-  // Create a write stash by writing to a path that fails. We force a failure by
-  // targeting a path under a file (not a dir) so mkdir/rename fails.
-  // Force a real write-type stash: writing ONTO an existing DIRECTORY fails at
-  // rename (EISDIR) and the tool caches the content via stashWrite.
-  const badTarget = path.join(F.A, 'src'); // an existing directory
-  const wr = await server.callTool('write_file', { path: badTarget, content: 'write-stash-content\n' });
-  const writeId = /stash:(\d+)/.exec(wr.text || '')?.[1] ? Number(/stash:(\d+)/.exec(wr.text || '')[1]) : null;
+  // apply the write-type stash created above with a newPath redirect (distinct
+  // routing case)
   if (writeId != null) {
     const goodTarget = path.join(F.A, 'write-applied.txt');
     cov.planned(T, transport, 1);

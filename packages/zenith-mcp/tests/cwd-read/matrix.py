@@ -17,9 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 import verifiers as V
 
-BASE = H.BASE
-SCRATCH = os.path.join(BASE, "agents", "prism")
-FIXTURES = os.environ.get("PRISM_FIXTURES", os.path.join(SCRATCH, "fixtures"))
+FIXTURES = os.environ.get("PRISM_FIXTURES", H.DEFAULT_FIXTURES)
 
 # A -> B -> A -> C -> B -> A (alpha, beta, gamma). Repeated transitions, same server.
 SEQ = ["proj-alpha", "proj-beta", "proj-alpha", "proj-gamma", "proj-beta", "proj-alpha"]

@@ -13,14 +13,12 @@ Usage:
 Exit code is 0 when the harness itself ran cleanly (regardless of product
 pass/fail — those are reported in the JSON + tables), non-zero on harness error.
 """
-import argparse, json, os, sys, time, hashlib, base64
+import argparse, json, os, re, sys, time, hashlib, base64
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H
 
-BASE = "/home/tanner/Projects/Zenith-Worktrees/bash"
-SCRATCH = os.path.join(BASE, "agents", "prism")
-FIXTURES = os.environ.get("PRISM_FIXTURES", os.path.join(SCRATCH, "fixtures"))
+FIXTURES = os.environ.get("PRISM_FIXTURES", H.DEFAULT_FIXTURES)
 MANIFEST_PATH = os.path.join(FIXTURES, "fixtures-manifest.json")
 
 # Canonical transition sequence required by the brief.
@@ -223,10 +221,34 @@ def make_read_media(relpath, kind):
         # Did we read a DIFFERENT project's media?
         for name in c["manifest"]:
             other = os.path.join(FIXTURES, name, relpath)
-            if os.path.exists(other) and sha(got) == sha(open(other, "rb").read()):
+            if os.path.exists(other) and sha(got) == sha(expected_file_bytes(name, relpath)):
                 return "wrong-root", f"media-from-other:{name}", name, {"sha": sha(got)[:16], "mime": mime}
         return "operation-error", f"media-bytes-unmatched sha={sha(got)[:16]} mime={mime}", None, {}
     return args, verify
+
+
+_READ_MULTIPLE_LABEL = re.compile(r"^- (\S.*)$")
+
+
+def split_read_multiple_entries(text):
+    """Parse a read_multiple_files response into [(basename, body)].
+
+    The tool emits one entry per requested path, "- <basename>\\n<body>",
+    joined by a blank line; every content line of a body carries an "N. "
+    line-number prefix (or is "ERROR: ...", or "[truncated]"). So a label is
+    recognised only as a whole line "- <name>" that is the first line of the
+    response or directly follows an empty line — never by substring, which a
+    content line such as "2. - notes.txt" would satisfy.
+    """
+    lines = text.split("\n")
+    entries = []
+    for i, line in enumerate(lines):
+        m = _READ_MULTIPLE_LABEL.match(line)
+        if m and (i == 0 or lines[i - 1] == ""):
+            entries.append([m.group(1), []])
+        elif entries:
+            entries[-1][1].append(line)
+    return [(name, "\n".join(body).strip("\n")) for name, body in entries]
 
 
 def make_read_multiple(relpaths, tokens, **kw):
@@ -244,14 +266,33 @@ def make_read_multiple(relpaths, tokens, **kw):
         hits = sum(1 for tok in tokens if tok in text)
         others = [n for tok, n in token_to_project(c["manifest"]).items()
                   if tok in text and n != c["expected_project"]]
-        if hits == len(tokens) and not others:
-            return "pass", f"all-{hits}-expected-tokens", c["expected_project"], {}
+        # Every requested path must come back as its own non-error entry.
+        # The response is parsed into entries structurally (see
+        # split_read_multiple_entries) rather than searched for "- <name>"
+        # substrings: a file's content can mention another file's label
+        # ("2. - notes.txt"), so a substring hit proves nothing was read.
+        entries = split_read_multiple_entries(text)
+        names = [n for n, _ in entries]
+        wanted = [os.path.basename(p) for p in relpaths]
+        missing = [p for p, b in zip(relpaths, wanted) if names.count(b) < wanted.count(b)]
+        errored = [n for n, body in entries if body.startswith("ERROR:")]
+        empty = [n for n, body in entries if not body]
+        extra = len(entries) - len(relpaths)
+        complete = not missing and not errored and not empty and extra == 0
+        if hits == len(tokens) and not others and complete:
+            return "pass", f"all-{hits}-expected-tokens;all-{len(relpaths)}-entries", c["expected_project"], {}
         if others:
             return "wrong-root", f"contained-other:{others[0]}", others[0], {}
         # per-file ERROR lines naming another tree = wrong-root-via-ENOENT
         wp = enoent_project(text, c["manifest"])
         if wp and wp != c["expected_project"]:
             return "wrong-root", f"enoent-under-other:{wp}", wp, {}
+        if not complete:
+            why = (f"entries-missing:{missing}" if missing else
+                   f"entries-errored:{errored}" if errored else
+                   f"entries-empty:{empty}" if empty else
+                   f"entries-count:{len(entries)}!={len(relpaths)}")
+            return "operation-error", f"{why}; text[:120]={text[:120]!r}", None, {}
         return "operation-error", f"tokens {hits}/{len(tokens)}; text[:120]={text[:120]!r}", None, {}
     return args, verify
 

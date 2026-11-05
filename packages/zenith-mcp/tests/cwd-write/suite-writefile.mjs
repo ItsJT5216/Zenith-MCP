@@ -16,7 +16,7 @@
 // ============================================================================
 import path from 'node:path';
 import fs from 'node:fs';
-import { realpathSafe, snapshotAll, diffManifests, expectedBoundary } from './lib.mjs';
+import { snapshotAll, diffManifests, expectedBoundary } from './lib.mjs';
 
 export async function runWriteFileSuite(server, F, rec, cov, ctx) {
   const T = 'write_file';

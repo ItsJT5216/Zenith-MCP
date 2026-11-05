@@ -226,7 +226,8 @@ export class ProjectContext {
     }
 
     /**
-     * Force re-resolution. Called when MCP roots change.
+     * Force re-resolution. MCP Roots are not wired, so nothing in src/ calls
+     * this today; it is exercised by tests and kept for hosts that need it.
      * Explicit bindings (set via initProject) are preserved — they are sticky.
      */
     refresh(): void {

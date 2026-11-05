@@ -10,7 +10,6 @@
 // each step. expectedActiveRoot is computed independently from the launcher
 // cwd we just set (its realpath boundary), never from the server.
 // ============================================================================
-import path from 'node:path';
 import { expectedBoundary, realpathSafe, sleep } from './lib.mjs';
 
 export const TTL_MS = 5000;

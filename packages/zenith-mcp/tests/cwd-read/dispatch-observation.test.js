@@ -46,23 +46,6 @@ async function importCore() {
     return { server, lib, pc };
 }
 
-/**
- * A capturing ToolServer that wraps the real registration so that, for each
- * dispatched call, we record the ProjectContext binding (root + tier) observed
- * BEFORE the owned handler body runs, plus the path validatePath resolved.
- */
-function makeInstrumentedServer(pc, ctx, observations) {
-    const handlers = new Map();
-    const server = {
-        registerTool(name, registration, handler) {
-            handlers.set(name, { registration, handler });
-        },
-    };
-    // The observation wrapper is applied at call time (below), not at register
-    // time, so registration metadata stays byte-identical (no schema injection).
-    return { server, handlers };
-}
-
 describe('cwd-read dispatch seam (instrumented, real FilesystemContext)', () => {
     let server, lib, pc;
     let ctx;
@@ -124,10 +107,13 @@ describe('cwd-read dispatch seam (instrumented, real FilesystemContext)', () => 
         // The read tool resolved the real absolute path and read the alpha token.
         expect(resolvedPath).toBe(fs.realpathSync(absTarget));
         expect(text).toContain(proj.token);
-        // The dispatch-time binding is observable and recorded (detected tier).
-        expect(['detected', 'registry', 'global', 'explicit']).toContain(observedTierAtDispatch);
-        // Sanity: the observed root is a real path string or null, never fabricated.
-        expect(observedRootAtDispatch === null || typeof observedRootAtDispatch === 'string').toBe(true);
+        // The dispatch-time binding is the fixture repo: the allowed dir IS a git
+        // root with no registry entry, so _resolveNoFile binds it at the detected
+        // tier (registry only if the user's config auto-promotes it). A global
+        // tier or null root here would mean the binding never happened.
+        expect(['detected', 'registry']).toContain(observedTierAtDispatch);
+        expect(typeof observedRootAtDispatch).toBe('string');
+        expect(fs.realpathSync(observedRootAtDispatch)).toBe(fs.realpathSync(proj.root));
     });
 
     it('relative resolution uses the independently granted project at dispatch', async () => {

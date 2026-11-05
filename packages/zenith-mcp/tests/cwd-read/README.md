@@ -21,27 +21,30 @@ stale launch directory.
 | `README.md` | This file. |
 
 The harness implementation (server spawn, ground-truth capture, the per-tool
-matrix) lives in the author's scratch `agents/prism/` (`harness.py`,
-`matrix.py`, `verifiers.py`, `run_suite.py`, `build_fixtures.py`,
-`independent_requester.py`). `run.py` sets `sys.path` to `PRISM_HOME` (default
-the scratch dir) and forwards.
+matrix) lives in this directory beside `run.py` (`harness.py`, `matrix.py`,
+`verifiers.py`, `run_suite.py`, `build_fixtures.py`,
+`independent_requester.py`). `run.py` inserts its own directory into
+`sys.path`, points `PRISM_FIXTURES` at `<out-dir>/fixtures-run<N>`, and
+forwards to `run_suite.main()`; no other environment variable is consulted.
 
 ## Running
 
-Requires the pinned toolchain on Tanner's machine and a built `dist` in the
-chosen repo root. No new dependencies (Python stdlib + Node only).
+Requires a Node binary — `ZENITH_NODE=/path/to/node` if set, else `node` on
+`PATH` (the same convention as `tests/cwd-write`; the harness fails with a
+clear message when neither resolves) — and a built `dist` in the chosen repo
+root. No new dependencies (Python stdlib + Node only).
 
 ```bash
 # Frozen baseline (orchestrator's stable reference build)
 python3 tests/cwd-read/run.py \
-  --repo-root /home/tanner/Projects/Zenith-Worktrees/bash/reference/zenith-cwd-handoff/repo \
-  --out-dir  /home/tanner/Projects/Zenith-Worktrees/bash/agents/prism/results/baseline \
+  --repo-root <path-to-baseline-checkout> \
+  --out-dir  <results>/baseline \
   --run-id 1
 
 # Final / patched build (after the orchestrator's coordinated rebuild)
 python3 tests/cwd-read/run.py \
-  --repo-root /home/tanner/Projects/Zenith-Worktrees/bash/zenith-cwd-handoff/repo \
-  --out-dir  /home/tanner/Projects/Zenith-Worktrees/bash/agents/prism/results/patched \
+  --repo-root <path-to-patched-checkout> \
+  --out-dir  <results>/patched \
   --run-id 1
 ```
 
@@ -78,6 +81,8 @@ operational success (`operation-error`) and from harness health
   tokens (kept out of logs and result files).
 - Each server gets a fresh isolated `HOME` with a pre-created valid config; the
   first-run wizard never runs against a real HOME.
-- Fixtures live under `agents/prism/fixtures` — outside `/tmp`, outside the
-  isolated HOME, and outside any unintended ancestor project.
+- Fixtures live under `<out-dir>/fixtures-run<N>` (`run.py` sets
+  `PRISM_FIXTURES`; the default without it is `~/.prism-cwd-read/fixtures`) —
+  outside `/tmp`, outside the isolated HOME, and outside any unintended
+  ancestor project.
 - The suite only terminates processes it started, and verifies cleanup.

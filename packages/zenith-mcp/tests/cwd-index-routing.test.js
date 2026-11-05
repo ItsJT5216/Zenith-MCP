@@ -1,7 +1,6 @@
 import { beforeEach, afterEach, describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { setup } from './cwd-context-test-support.mjs';
 let h;
 beforeEach(async () => { h = await setup(); });

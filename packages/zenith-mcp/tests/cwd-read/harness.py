@@ -17,11 +17,30 @@ Design notes (from source + handoff review):
   harness IS the server's parent and controls its own cwd to present that
   evidence. No test supplies a cwd argument or any project/identity header.
 """
-import json, os, socket, subprocess, sys, threading, time, select
-import urllib.request, urllib.error
+import json, os, socket, subprocess, sys, threading, time, select, shutil
+import urllib.request, urllib.error, http.client
 
-BASE = "/home/tanner/Projects/Zenith-Worktrees/bash"
-NODE = f"{BASE}/tooling/node-v26.3.0-linux-x64/bin/node"
+HERE = os.path.dirname(os.path.abspath(__file__))
+# Fixture location when PRISM_FIXTURES is unset (run.py always sets it): under
+# the home directory like the vitest fixtures — outside /tmp (a junk root for
+# detection) and outside any ancestor project.
+DEFAULT_FIXTURES = os.path.join(os.path.expanduser("~"), ".prism-cwd-read", "fixtures")
+
+
+def resolve_node():
+    """Node binary for the spawned servers: $ZENITH_NODE if set, else `node` on
+    PATH (the convention shared with tests/cwd-write). Fails with a clear
+    message instead of an obscure Popen error deep inside the suite."""
+    want = os.environ.get("ZENITH_NODE") or "node"
+    node = shutil.which(want)
+    if not node:
+        raise FileNotFoundError(
+            f"cwd-read harness: Node binary {want!r} not found - set ZENITH_NODE=/path/to/node "
+            "or put `node` on PATH")
+    return os.path.abspath(node)
+
+
+NODE = resolve_node()
 PROTO_MODERN = "2026-07-28"
 PROTO_LEGACY = "2025-03-26"
 CALLER_TTL_MS = 5000  # production getCallerCwds TTL (detection/process-tree.ts)
@@ -111,7 +130,11 @@ class ServerHandle:
                 [NODE, self.http_js, "--host=127.0.0.1", f"--port={self.port}"],
                 cwd=self.spawn_cwd, env=env,
                 stdin=subprocess.DEVNULL, stdout=self._of, stderr=self._ef)
-            self._wait_health()
+            try:
+                self._wait_health()
+            except BaseException:
+                self.stop()  # never leak a child the caller has no handle to
+                raise
         return self
 
     @property
@@ -131,7 +154,9 @@ class ServerHandle:
                 with urllib.request.urlopen(base + "/health", timeout=1) as r:
                     if r.status == 200:
                         return
-            except Exception:
+            except (OSError, http.client.HTTPException):
+                # Not listening yet (refused / reset / timeout / non-200 /
+                # half-written response): keep polling until the deadline.
                 pass
             time.sleep(0.1)
         raise RuntimeError(f"http server health timeout; see {self.err_log}")
@@ -227,31 +252,32 @@ class ServerHandle:
             try:
                 if p.stdin:
                     p.stdin.close()  # EOF -> stdio server exits its read loop
-            except Exception:
-                pass
+            except OSError:
+                pass  # pipe already broken/closed: the child is on its way out
             try:
                 p.wait(timeout=2.0)          # graceful EOF exit
-            except Exception:
-                pass
+            except subprocess.TimeoutExpired:
+                pass  # still running: escalate to SIGTERM below
             if p.poll() is None:
                 try:
                     p.terminate()            # SIGTERM
                     p.wait(timeout=1.0)
-                except Exception:
-                    pass
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # ignored SIGTERM, or exited between poll() and signal: SIGKILL below
             if p.poll() is None:
                 try:
                     p.kill()                 # SIGKILL
-                except Exception:
-                    pass
+                except OSError:
+                    pass  # exited between poll() and kill(); the final wait() reaps it
             try:
                 p.wait(timeout=2.0)          # reap; never leave a zombie
-            except Exception:
-                pass
+            except subprocess.TimeoutExpired:
+                pass  # unreapable (e.g. stuck in D state); nothing more we can do
         for f in (getattr(self, "_of", None), getattr(self, "_ef", None)):
             try:
                 if f: f.close()
-            except Exception: pass
+            except OSError:
+                pass  # a log-file flush failure must not mask the result being recorded
 
 
 def _parse_http(ct, raw):

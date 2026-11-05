@@ -130,7 +130,7 @@ def json_pkg(name):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        "/home/tanner/Projects/Zenith-Worktrees/bash/agents/prism", "fixtures")
+        os.path.expanduser("~"), ".prism-cwd-read", "fixtures")  # == harness.DEFAULT_FIXTURES
     os.makedirs(root, exist_ok=True)
     # A parent container with NO marker/git so ancestors don't become a project.
     # (fixtures root itself must be markerless.)

@@ -102,9 +102,18 @@ function resolveBashPath(): string {
 // is inherited (no `env`, exactly like rg). stdin is closed so nothing ever
 // waits on input. A synchronous spawn failure (an over-long argument list, say)
 // is the tool failing, in the tool's words.
+//
+// Static analysers flag a spawn whose program is a parameter. Here `shell` is
+// never caller input: the caller cannot name a program (the schema is strict —
+// command, cwd, timeout), and the only value ever passed is the absolute path
+// resolveBashPath() found on PATH or at a well-known location. `command` is
+// the tool's payload: running it is the tool's purpose, not an injection into
+// something else, and the control is the `### Tools` switch (`bash: disabled`)
+// documented in the README. Nothing here is sanitised because nothing here is
+// a template.
 function spawnBash(shell: string, command: string, cwd: string) {
     try {
-        return spawn(shell, ['-c', command], {
+        return spawn(shell, ['-c', command], { // nosemgrep: javascript.lang.security.detect-child-process
             cwd,
             detached: process.platform !== 'win32',
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -113,6 +122,20 @@ function spawnBash(shell: string, command: string, cwd: string) {
     } catch (err) {
         throw new Error(`Spawn failed: ${errorMessage(err)}`);
     }
+}
+
+// The transcript contract is positional: line 1 is the prompt, the last line
+// is the status, everything between is the command's output. Both parts of
+// the prompt can contain line breaks — a command may be a heredoc or a loop,
+// and a directory name may legally contain a newline — so they are escaped
+// for display only: `\` → `\\`, CR → `\r`, LF → `\n`. Escaping the backslash
+// too keeps the rendering unambiguous (a literal `\n` in the command shows as
+// `\\n`). The command itself reaches bash exactly as given.
+function escapePrompt(value: string): string {
+    return value
+        .replace(/\\/g, '\\\\')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -465,9 +488,13 @@ export function register(server: ToolServer, ctx: ToolContext): void {
         // validatePath then applies the sandbox policy, when one is enabled, to
         // that directory exactly as it does to every other tool's path.
         const pc = getProjectContext(ctx);
-        const cwd = args.cwd !== undefined
-            ? await ctx.validatePath(args.cwd)
-            : await ctx.validatePath(pc.getRoot() ?? ctx.getAllowedDirectories()[0] ?? process.cwd());
+        const requestedCwd = args.cwd ?? pc.getRoot() ?? ctx.getAllowedDirectories()[0] ?? process.cwd();
+        // A request already cancelled gets its documented `[cancelled]` result
+        // before anything that can throw: validation is for a command about to
+        // start, and this one never does. The prompt carries the directory as
+        // requested, since nothing was validated or run.
+        if (signal?.aborted) return { content: [{ type: "text", text: `${escapePrompt(requestedCwd)}$ ${escapePrompt(args.command)}\n[cancelled]` }] };
+        const cwd = await ctx.validatePath(requestedCwd);
         // validatePath resolves a missing target to an absolute path whenever its
         // parent exists, so existence and kind are established here.
         const cwdStat = await fs.stat(cwd).catch((err: unknown) => {
@@ -479,7 +506,7 @@ export function register(server: ToolServer, ctx: ToolContext): void {
 
         const timeoutS = Math.min(args.timeout ?? getBashTimeoutSeconds(), getBashMaxTimeoutSeconds());
         const shell = resolveBashPath();
-        const prompt = `${cwd}$ ${args.command}\n`;
+        const prompt = `${escapePrompt(cwd)}$ ${escapePrompt(args.command)}\n`;
         if (signal?.aborted) return { content: [{ type: "text", text: `${prompt}[cancelled]` }] };
 
         const proc = spawnBash(shell, args.command, cwd);
@@ -495,6 +522,8 @@ export function register(server: ToolServer, ctx: ToolContext): void {
         const stderrDecoder = new TextDecoder('utf-8');
 
         let stopping: StopReason | null = null;
+        /** The exit grace cut the pipes: whatever a holder wrote after that is not in the transcript. */
+        let pipesCut = false;
         let transcript = '';
         let timeoutTimer: NodeJS.Timeout | undefined;
         let termGraceTimer: NodeJS.Timeout | undefined;
@@ -584,11 +613,12 @@ export function register(server: ToolServer, ctx: ToolContext): void {
                 };
                 // `close` normally follows `exit` within microseconds. When it does not, a
                 // descendant is holding the inherited pipes; it must not hang the tool, so
-                // the pipes are cut and the shell's own status is used.
+                // the pipes are cut and the shell's own status is used, marked as cut off.
                 const scheduleExitGrace = (): void => {
                     if (exitGraceTimer !== undefined) return;
                     exitGraceTimer = setTimeout(() => {
                         if (exitStatus === undefined) return;
+                        pipesCut = true;
                         proc.stdout.destroy();
                         proc.stderr.destroy();
                         finalize(exitStatus);
@@ -631,6 +661,9 @@ export function register(server: ToolServer, ctx: ToolContext): void {
                     groupPoll = setInterval(() => {
                         if (!groupGone()) return;
                         clearInterval(groupPoll);
+                        // The group is gone, so a SIGKILL now could only reach a reused pgid;
+                        // settle() may still be waiting out the exit grace when it would fire.
+                        clearTimeout(termGraceTimer);
                         treeDead = true;
                         settle();
                     }, GROUP_POLL_MS);
@@ -686,16 +719,19 @@ export function register(server: ToolServer, ctx: ToolContext): void {
             if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort);
         }
 
-        // Render: prompt line, the output (omitted when empty, otherwise ending in
+        // Render: the prompt line, the output (omitted when empty, otherwise ending in
         // exactly one newline), status line. The exit code is data — only the tool
-        // itself failing goes through the throw channel above.
+        // itself failing goes through the throw channel above. A shell's own status
+        // says when the exit grace cut the pipes; a stop's already says the group
+        // was killed.
         const body = transcript.length === 0 ? '' : transcript.endsWith('\n') ? transcript : `${transcript}\n`;
+        const cutOff = pipesCut ? '; output after exit cut off' : '';
         let statusLine: string;
         if (stopping === 'timeout') statusLine = `[timed out after ${timeoutS}s; process group killed]`;
         else if (stopping === 'cancel') statusLine = '[cancelled; process group killed]';
-        else if (status.signal !== null) statusLine = `[terminated by ${status.signal}]`;
-        else if (status.code !== null) statusLine = `[exit code ${status.code}]`;
-        else statusLine = '[exit code unknown]';
+        else if (status.signal !== null) statusLine = `[terminated by ${status.signal}${cutOff}]`;
+        else if (status.code !== null) statusLine = `[exit code ${status.code}${cutOff}]`;
+        else statusLine = `[exit code unknown${cutOff}]`;
         return { content: [{ type: "text", text: `${prompt}${body}${statusLine}` }] };
     });
 }

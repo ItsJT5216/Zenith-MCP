@@ -3,7 +3,8 @@
 //
 // Usage:
 //   node run.mjs --repo-root <repo> --out-dir <dir> [--repetitions 3]
-//     [--transports stdio,http] [--home-base <dir>] [--fixtures-base <dir>]
+//     [--transports stdio,http] [--base <dir>] [--home-base <dir>] [--fixtures-base <dir>]
+// Servers are spawned with $ZENITH_NODE if set, else this process's Node.
 //
 // The SAME suite runs against the frozen baseline and the final patched build
 // by passing a different --repo-root. All state (fixtures, isolated HOMEs,
@@ -24,12 +25,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {
   buildFixtures, makeIsolatedHome, snapshotAll, diffManifests, expectedBoundary,
-  realpathSafe, sleep,
+  realpathSafe, NODE_BIN,
 } from './lib.mjs';
 import { makeServer } from './server.mjs';
 import { Recorder, Coverage } from './report.mjs';
-import { driveTransitions, transitionPlan, TTL_MS } from './transitions.mjs';
-import { runBashSuite } from './suite-bash.mjs';
+import { driveTransitions } from './transitions.mjs';
+import { runBashSuite, parseTranscript } from './suite-bash.mjs';
 import { runWriteFileSuite } from './suite-writefile.mjs';
 import { runEditFileSuite } from './suite-editfile.mjs';
 import { runFileManagerSuite } from './suite-filemanager.mjs';
@@ -54,9 +55,6 @@ const REPO_ROOT = args['repo-root'];
 const OUT_DIR = args['out-dir'];
 const REPETITIONS = Math.max(1, parseInt(args['repetitions'] ?? '3', 10));
 const TRANSPORTS = String(args['transports'] ?? 'stdio,http').split(',').map(s => s.trim()).filter(Boolean);
-const BASE = args['base'] ?? '/home/tanner/Projects/Zenith-Worktrees/bash/agents/flint';
-const HOME_BASE = args['home-base'] ?? path.join(BASE, 'home');
-const FIX_BASE = args['fixtures-base'] ?? path.join(BASE, 'fixtures-run');
 
 if (!REPO_ROOT || !OUT_DIR) {
   console.error('required: --repo-root <repo> --out-dir <dir>');
@@ -66,7 +64,13 @@ if (!fs.existsSync(path.join(REPO_ROOT, 'packages/zenith-mcp/dist/cli/stdio.js')
   console.error('repo-root has no built dist/cli/stdio.js: ' + REPO_ROOT);
   process.exit(2);
 }
+// Isolated HOMEs and fixtures live under --base (default <out-dir>/base): a
+// caller-chosen directory, created here, never a fixed machine path.
+const BASE = path.resolve(args['base'] ?? path.join(OUT_DIR, 'base'));
+const HOME_BASE = args['home-base'] ?? path.join(BASE, 'home');
+const FIX_BASE = args['fixtures-base'] ?? path.join(BASE, 'fixtures-run');
 fs.mkdirSync(OUT_DIR, { recursive: true });
+fs.mkdirSync(BASE, { recursive: true });
 
 const globalRecord = {
   repoRoot: REPO_ROOT,
@@ -79,12 +83,14 @@ const globalRecord = {
 
 const OWNED = ['bash', 'write_file', 'edit_file', 'file_manager', 'stashRestore', 'refactor_batch'];
 
-async function runOneServer(transport, rep, registerAlpha) {
+async function runOneServer(transport, rep) {
   const label = `${transport}-rep${rep}`;
   const home = path.join(HOME_BASE, `${label}`);
   const fixRoot = path.join(FIX_BASE, `${label}`);
   const token = 'flint-' + crypto.randomBytes(16).toString('hex');
-  const projects = registerAlpha ? [{ id: 'alpha', root: path.join(fixRoot, 'proj-alpha'), name: 'Alpha' }] : [];
+  // Alpha is registered on every run so the refactor persistence-consent case
+  // has a registered fixture; detection cases still use B/C unregistered.
+  const projects = [{ id: 'alpha', root: path.join(fixRoot, 'proj-alpha'), name: 'Alpha' }];
   makeIsolatedHome(home, { port: 0, projects });
   const F = buildFixtures(fixRoot);
 
@@ -119,7 +125,7 @@ async function runOneServer(transport, rep, registerAlpha) {
   const suiteCtx = {
     serverInstance: serverInstanceId,
     driveTransitions: drive,
-    registeredProject: registerAlpha ? 'A' : null,
+    registeredProject: 'A',
   };
 
   // Run the six owned-tool suites against this ONE long-running server.
@@ -212,10 +218,10 @@ async function runTwoServerIsolation(transport, rep) {
   // We capture each server's implicit bash pwd (no cwd) — its first-detection.
   process.chdir(FA.A); // park parent in A
   const rA = await sA.callTool('bash', { command: 'pwd' });
-  const promptA = (rA.text || '').split('$')[0];
+  const promptA = parseTranscript(rA.text, 'pwd')?.cwd ?? null;
   process.chdir(FB.B);
   const rB = await sB.callTool('bash', { command: 'pwd' });
-  const promptB = (rB.text || '').split('$')[0];
+  const promptB = parseTranscript(rB.text, 'pwd')?.cwd ?? null;
 
   rec.record({ tool: 'bash', mode: 'run', transport, serverInstance: `twoserver-A:${sA.pid}`, phase: 'two-server-A',
     transitionKind: 'concurrent', launcherCwd: realpathSafe(FA.A), serverProcCwd: sA.serverProcCwd(),
@@ -278,22 +284,22 @@ async function runIndependentHttpClient(rep) {
   const reqFile = path.join(fixRoot, 'requester.mjs');
   fs.writeFileSync(reqFile, requesterSrc);
   const { spawnSync } = await import('node:child_process');
-  const NODE = '/home/tanner/Projects/Zenith-Worktrees/bash/tooling/node-v26.3.0-linux-x64/bin/node';
-  const res = spawnSync(NODE, [reqFile], {
+  const res = spawnSync(NODE_BIN, [reqFile], {
     cwd: F.C, // the requester runs in fixture C — NOT a server ancestor
     env: { PATH: '/usr/bin:/bin', HOME: home, TKN: token, BASE: server.base, CI: '1', NO_COLOR: '1' },
     encoding: 'utf8', timeout: 20000,
   });
   const outText = res.stdout || '';
   // The requester prints RESULT=<JSON string of the transcript>. Parse once to
-  // get the transcript text, then take the prompt cwd before the first '$'.
+  // get the transcript text, then read the cwd off its prompt line.
   let observed = null;
   const m2 = /RESULT=("[\s\S]*?")\s*$/.exec(outText.trim());
   if (m2) {
-    try { const transcript = JSON.parse(m2[1]); observed = typeof transcript === 'string' ? transcript.split('$')[0] : null; }
+    try { const transcript = JSON.parse(m2[1]); observed = typeof transcript === 'string' ? (parseTranscript(transcript, 'pwd')?.cwd ?? null) : null; }
     catch { observed = null; }
   }
-  if (res.status !== 0 || res.error) observed = observed; // keep parse; mark harness-error below via status
+  // A requester failure leaves `observed` null; the record below marks that
+  // harness-error via status.
   const serverRoot = expectedBoundary(F.A);
   const requesterCwd = realpathSafe(F.C);
 
@@ -316,9 +322,7 @@ async function runIndependentHttpClient(rep) {
 (async () => {
   for (const transport of TRANSPORTS) {
     for (let rep = 0; rep < REPETITIONS; rep++) {
-      // registerAlpha=true on every run so the refactor persistence-consent case
-      // has a registered fixture; detection cases still use B/C unregistered.
-      const r = await runOneServer(transport, rep, true);
+      const r = await runOneServer(transport, rep);
       globalRecord.runs.push({ label: r.label, eventsPath: r.eventsPath, coverage: r.coverage });
       const iso = await runTwoServerIsolation(transport, rep);
       globalRecord.runs.push({ label: iso.label, eventsPath: iso.eventsPath, coverage: iso.coverage });

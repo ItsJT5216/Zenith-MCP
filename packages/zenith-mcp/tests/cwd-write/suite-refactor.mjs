@@ -128,7 +128,7 @@ export async function runRefactorSuite(server, F, rec, cov, ctx) {
       expectedProject: proj, labels: ['detection-target', 'loadDiff'],
       verify: (r) => {
         const t = r.text || '';
-        const ok = /helperAlpha/.test(t) || /No symbols loaded/.test(t);
+        const ok = /helperAlpha \[\d+\]/.test(t);
         return { ok, reason: /helperAlpha \[\d+\]/.test(t) ? 'loadDiff loaded the target symbol from the active project' : `loadDiff: ${t.slice(0, 80)}` };
       } });
     // dryRun apply for the loaded symbol (real validation, no write)

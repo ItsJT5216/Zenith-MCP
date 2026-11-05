@@ -134,16 +134,18 @@ in the accounting.
 The runner must be launched through Python subprocess with a clean env (the
 inherited terminal aborts the pinned Node with exit 134 — see
 tooling/README.md). `run.py` does this (clean env, RLIMIT_CORE=0, piped logs).
+It uses `$ZENITH_NODE` when set, else `node` on PATH; fixtures and isolated
+HOMEs are created under `--base` (default `<out-dir>/base`).
 
 ```bash
 # frozen baseline
 python3 run.py \
-  --repo-root /home/tanner/Projects/Zenith-Worktrees/bash/reference/zenith-cwd-handoff/repo \
+  --repo-root <baseline-repo> \
   --out-dir   <out>/baseline --repetitions 3 --transports stdio,http
 
 # final patched build (same suite, different --repo-root)
 python3 run.py \
-  --repo-root /home/tanner/Projects/Zenith-Worktrees/bash/zenith-cwd-handoff/repo \
+  --repo-root <patched-repo> \
   --out-dir   <out>/patched --repetitions 3 --transports stdio,http
 
 # registration-seam evidence (in-process; one repo at a time)

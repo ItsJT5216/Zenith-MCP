@@ -22,7 +22,6 @@
 // evidence deterministic we rely on the ping reading OUR process.cwd() as the
 // final 'self:cwd' candidate (getProcessTreeCwds always appends it).
 // ============================================================================
-import fs from 'node:fs';
 import path from 'node:path';
 
 // dist modules are imported dynamically from the selected repo root so the

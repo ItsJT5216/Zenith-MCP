@@ -38,7 +38,8 @@ export async function runEditFileSuite(server, F, rec, cov, ctx) {
       // dryRun: file must be UNCHANGED (still its original content)
       let onDisk = null;
       try { onDisk = fs.readFileSync(opts.expectedAbs, 'utf8'); } catch {}
-      if (effects.length === 0 && onDisk === opts.unchangedContent) { status = 'ok'; reason = 'dryRun produced a diff without writing'; }
+      const hasPreview = (r.text || '').trim().length > 0;
+      if (effects.length === 0 && onDisk === opts.unchangedContent && hasPreview) { status = 'ok'; reason = 'dryRun produced a diff without writing'; }
       else { status = 'operation-error'; reason = 'dryRun mutated the file or produced no diff'; }
     }
 

@@ -16,11 +16,31 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { realpathSafe, sleep, snapshotAll, diffManifests, expectedBoundary } from './lib.mjs';
 
-function promptCwd(text, command) {
-  // first line: `<cwd>$ <command>`
-  const esc = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp(`^(.*)\\$ ${esc}`, 'm').exec(text || '');
-  return m ? m[1] : null;
+// The tool escapes the prompt for display — backslash doubled, CR and LF as
+// `\r` / `\n` — so the prompt is always exactly one line. The same escaping
+// is applied to the command we look for, and undone on the cwd we read back,
+// so a working directory whose name holds a backslash or a line break still
+// compares equal to the real path.
+const escapePrompt = (v) => v.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+const unescapePrompt = (v) => v.replace(/\\(\\|r|n)/g, (_, c) => (c === '\\' ? '\\' : c === 'r' ? '\r' : '\n'));
+
+/**
+ * Split a bash transcript by position: line 1 is the prompt `<cwd>$ <command>`,
+ * the last line is the status, everything between is the command's output.
+ * Returns null when line 1 is not the prompt for `command`. Checks on what the
+ * command printed must look at `body` only — the prompt carries the cwd path,
+ * and a path can contain any text a body check is looking for.
+ */
+export function parseTranscript(text, command) {
+  const lines = (text || '').split('\n');
+  const esc = escapePrompt(command).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = new RegExp(`^(.*)\\$ ${esc}$`).exec(lines[0] ?? '');
+  if (!m) return null;
+  return {
+    cwd: unescapePrompt(m[1]),
+    body: lines.slice(1, -1).join('\n'),
+    status: lines.length > 1 ? lines[lines.length - 1] : '',
+  };
 }
 
 export async function runBashSuite(server, F, rec, cov, ctx) {
@@ -34,7 +54,8 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
     const after = snapshotAll(F);
     const effects = diffManifests(before, after);
 
-    const observed = r.text ? promptCwd(r.text, command) : null;
+    const parsed = r.text ? parseTranscript(r.text, command) : null;
+    const observed = parsed ? parsed.cwd : null;
     const isOverride = !!opts.cwd;
     // Expected active root: from the launcher cwd we set (detection), unless override.
     const expectedRoot = isOverride ? null : stepCtx.expectedActiveRoot;
@@ -44,6 +65,12 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
     let status = 'correct';
     let reason = '';
     if (!r.ok && (r.rpcError || r.transportError)) { status = 'harness-error'; reason = 'transport/rpc error'; }
+    else if (!r.isError && observed === null) {
+      // The prompt is where the active root is read from; a transcript whose
+      // first line is not `<cwd>$ <command>` proves nothing and must not be
+      // recorded under the default status.
+      status = 'harness-error'; reason = `prompt line not parseable: ${JSON.stringify((r.text || '').split('\n')[0].slice(0, 160))}`;
+    }
     else if (opts.expectError) {
       // a tool-level throw surfaces as isError content
       if (r.isError) { status = 'ok'; reason = 'expected tool error surfaced'; }
@@ -51,6 +78,14 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
     } else if (r.isError) { status = 'operation-error'; reason = 'unexpected tool error: ' + (r.text || '').slice(0, 120); }
     else if (!isOverride && observed && expectedRoot && realpathSafe(observed) !== realpathSafe(expectedRoot)) {
       status = 'wrong-root'; reason = `prompt cwd ${observed} != expected ${expectedRoot}`;
+    } else if (opts.expectText && !(parsed ? parsed.body : '').includes(opts.expectText)) {
+      // the body — not the prompt, whose path may contain the text — identifies
+      // the project the command really ran in
+      status = 'wrong-root'; reason = `body lacks "${opts.expectText}"`;
+    } else if (opts.expectTranscript && !opts.expectTranscript(r.text || '')) {
+      // breadth cases: the transcript shape (status line, merged stderr, ANSI
+      // stripping, timeout line) is the behaviour under test, not just the cwd
+      status = 'operation-error'; reason = `transcript mismatch: ${JSON.stringify((r.text || '').slice(-160))}`;
     } else if (!isOverride && observed && expectedRoot) {
       status = 'correct'; reason = 'prompt cwd matches expected active root';
     } else if (isOverride) {
@@ -85,7 +120,8 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
     await invoke(stepCtx, 'pwd');
     // relative fixture read WITHOUT cwd: `cat marker.txt` resolves in the
     // selected project. The file content uniquely identifies the project.
-    await invoke(stepCtx, 'cat marker.txt', { mode: 'relative-read' });
+    const expectText = stepCtx.expectedActiveRoot ? `hello from ${path.basename(stepCtx.expectedActiveRoot)}` : undefined;
+    await invoke(stepCtx, 'cat marker.txt', { mode: 'relative-read', expectText });
   });
 
   // ---- Immutable captured cwd: a started child overlaps a later call --------
@@ -130,11 +166,11 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
   // 1. nonzero exit reported as DATA (grep no-match → exit 1), not a tool throw
   breadth.push(plan(1, () => invoke(A, 'grep -q ZZZ marker.txt; echo done', { mode: 'nonzero-data', labels: ['exit-code-data'] })));
   // 2. exit 3 surfaces as data
-  breadth.push(plan(1, () => invoke(A, 'exit 3', { mode: 'nonzero-data', labels: ['exit-code-data'] })));
-  // 3. stderr merged into the transcript
-  breadth.push(plan(1, () => invoke(A, 'echo out; echo err 1>&2', { mode: 'merge' })));
-  // 4. ANSI stripped (red escape)
-  breadth.push(plan(1, () => invoke(A, "printf '\\033[31mred\\033[0m\\n'", { mode: 'ansi-strip' })));
+  breadth.push(plan(1, () => invoke(A, 'exit 3', { mode: 'nonzero-data', labels: ['exit-code-data'], expectTranscript: (t) => t.endsWith('[exit code 3]') })));
+  // 3. stderr merged into the transcript (a whole `err` line, not the prompt's echo)
+  breadth.push(plan(1, () => invoke(A, 'echo out; echo err 1>&2', { mode: 'merge', expectTranscript: (t) => /^err$/m.test(t) })));
+  // 4. ANSI stripped (red escape): a bare `red` line and no ESC byte anywhere
+  breadth.push(plan(1, () => invoke(A, "printf '\\033[31mred\\033[0m\\n'", { mode: 'ansi-strip', expectTranscript: (t) => /^red$/m.test(t) && !t.includes('\u001b') })));
   // 5. relative nested read from a subdirectory of the selected project
   breadth.push(plan(1, () => invoke(A, 'cat src/a.js | head -1', { mode: 'relative-read-nested' })));
   // 6. a write INSIDE the fixture via bash redirect (allowed; inside fixtures)
@@ -146,7 +182,7 @@ export async function runBashSuite(server, F, rec, cov, ctx) {
   // 9. recovery: after the bad-cwd error, a normal implicit pwd still works
   breadth.push(plan(1, () => invoke(A, 'pwd', { mode: 'recovery', labels: ['recovery'] })));
   // 10. timeout control: bounded disposable child killed after 1s
-  breadth.push(plan(1, () => invoke(A, 'echo start; sleep 30', { timeout: 1, mode: 'timeout', labels: ['timeout-control'], timeoutMs: 20000 })));
+  breadth.push(plan(1, () => invoke(A, 'echo start; sleep 30', { timeout: 1, mode: 'timeout', labels: ['timeout-control'], timeoutMs: 20000, expectTranscript: (t) => t.endsWith('[timed out after 1s; process group killed]') })));
   // 11. symlinked alias path: run pwd with explicit cwd = beta-link (realpath → B)
   breadth.push(plan(1, () => invoke(A, 'pwd', { cwd: F.betaAlias, mode: 'symlink-alias', labels: ['symlink'] })));
   // 12. space-dir project: explicit cwd into the space project (realpath has space)

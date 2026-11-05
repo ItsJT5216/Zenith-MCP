@@ -18,7 +18,7 @@ import path from 'node:path';
 import { createSeamObserver, registerToolOnSeam } from './seam.mjs';
 import { buildFixtures, makeIsolatedHome, expectedBoundary, realpathSafe, snapshotAll, diffManifests, sleep } from './lib.mjs';
 import { Recorder, Coverage } from './report.mjs';
-import { transitionPlan, TTL_MS } from './transitions.mjs';
+import { transitionPlan } from './transitions.mjs';
 
 function parseArgs(argv) {
   const a = {};
@@ -84,14 +84,16 @@ for (let i = 0; i < plan.length; i++) {
   // edit_file: real content edit in THIS project's edit.txt (restore after)
   const eFile = path.join(dir, 'edit.txt');
   const bE = snapshotAll(F);
-  let rE, errE = null;
+  let rE, errE = null, editedE = false;
   try {
     rE = await H('edit_file')({ path: eFile, edits: [{ mode: 'content', oldContent: 'gamma three', newContent: `g-${step.proj}-${i}` }] });
+    // confirm the real effect before the revert hides it (a no-op is not ok)
+    try { editedE = fs.readFileSync(eFile, 'utf8').includes(`g-${step.proj}-${i}`); } catch {}
     await H('edit_file')({ path: eFile, edits: [{ mode: 'content', oldContent: `g-${step.proj}-${i}`, newContent: 'gamma three' }] });
   } catch (e) { errE = String(e && e.message); }
   const eE = diffManifests(bE, snapshotAll(F));
   recordSeam('edit_file', 'content', phase, step.kind, expected, obsBefore, {
-    expectedTarget: eFile, fsEffects: eE, ok: !errE, resultText: rE?.content?.[0]?.text ?? errE,
+    expectedTarget: eFile, fsEffects: eE, ok: !errE && editedE, resultText: rE?.content?.[0]?.text ?? errE,
   });
 
   // file_manager: real mkdir in THIS project
@@ -108,7 +110,8 @@ for (let i = 0; i < plan.length; i++) {
   let rR, errR = null;
   try { rR = await H('refactor_batch')({ mode: 'loadDiff', selection: [{ symbol: 'helperAlpha', file: 'src/a.js' }], contextLines: 0 }); } catch (e) { errR = String(e && e.message); }
   recordSeam('refactor_batch', 'loadDiff', phase, step.kind, expected, obsBefore, {
-    expectedTarget: path.join(dir, 'src', 'a.js'), fsEffects: [], ok: !errR, resultText: rR?.content?.[0]?.text ?? errR,
+    expectedTarget: path.join(dir, 'src', 'a.js'), fsEffects: [], ok: !errR && /helperAlpha \[\d+\]/.test(rR?.content?.[0]?.text ?? ''),
+    resultText: rR?.content?.[0]?.text ?? errR,
   });
 
   // bash: black-box cross-check (prompt cwd) AND the seam observation
@@ -116,7 +119,7 @@ for (let i = 0; i < plan.length; i++) {
   try { rB = await H('bash')({ command: 'pwd' }); } catch (e) { errB = String(e && e.message); }
   const prompt = rB?.content?.[0]?.text ? rB.content[0].text.split('$')[0] : null;
   recordSeam('bash', 'run', phase, step.kind, expected, obsBefore, {
-    expectedTarget: expected, fsEffects: [], ok: !errB,
+    expectedTarget: expected, actualTarget: prompt, fsEffects: [], ok: !errB,
     observedActiveRoot: prompt, resultText: rB?.content?.[0]?.text ?? errB, crossCheck: true,
   });
 }
@@ -136,10 +139,16 @@ function recordSeam(tool, mode, phase, kind, expected, obsBeforeIdx, opts) {
     tool, mode, transport: 'registration-seam', serverInstance: 'in-process', phase, transitionKind: kind,
     launcherCwd: process.cwd(), serverProcCwd: process.cwd(), evidenceTopology: 'registration-seam',
     expectedActiveRoot: expected, observedActiveRoot: observedRoot, activeRootObservable: observable,
-    expectedTarget: opts.expectedTarget ?? null, actualTarget: opts.expectedTarget ?? null,
-    fsEffects: opts.fsEffects ?? [], crossProjectMutation: (opts.fsEffects ?? []).some(e => expected && !e.project.match(new RegExp(expected))),
+    // target accuracy counts a CONFIRMED effect only: bash supplies its observed
+    // prompt cwd; the others get their expected path when the effect check
+    // (opts.ok) passed, else null — still in the denominator, not the numerator.
+    expectedTarget: opts.expectedTarget ?? null,
+    actualTarget: 'actualTarget' in opts ? opts.actualTarget : (opts.ok ? opts.expectedTarget ?? null : null),
+    // e.project is the manifest label ('A'|'B'|'C'|'S'); compare it with this
+    // step's label (phase is `${proj}#...`), not with the absolute root path.
+    fsEffects: opts.fsEffects ?? [], crossProjectMutation: (opts.fsEffects ?? []).some(e => expected && e.project !== phase.split('#')[0]),
     status,
-    assertionReason: !opts.ok ? 'handler error: ' + String(opts.resultText).slice(0, 100)
+    assertionReason: !opts.ok ? 'handler error or effect not confirmed: ' + String(opts.resultText).slice(0, 100)
       : (observable ? `seam observed dispatch root ${observedRoot} (tier before=${mine?.tierBeforeDispatch}, after=${mine?.tierAfterDispatch})` : 'root not observable for this call'),
     resultText: opts.resultText != null ? String(opts.resultText).slice(0, 400) : null,
     labels: ['seam', 'real-handler', opts.crossCheck ? 'blackbox-crosscheck' : 'root-observation'],

@@ -28,7 +28,7 @@ export async function runFileManagerSuite(server, F, rec, cov, ctx) {
       else { status = 'operation-error'; reason = 'expected error but call succeeded'; }
     } else if (r.isError) { status = 'operation-error'; reason = 'unexpected tool error: ' + (r.text || '').slice(0, 120); }
     else if (opts.verify) {
-      const v = opts.verify();
+      const v = opts.verify(r);
       // crossMut only counts as contamination when this case did not intend a
       // cross-project operation (a deliberate cross-project move is legitimate).
       const crossMut = !opts.allowCross && effects.some(e => e.project !== opts.expectedProject);
@@ -78,7 +78,7 @@ export async function runFileManagerSuite(server, F, rec, cov, ctx) {
     // info on the moved file
     cov.planned(T, transport, 1);
     await invoke(stepCtx, { mode: 'info', path: dst },
-      { expectedProject: proj, expectedTarget: dst, labels: ['info'], verify: () => ({ ok: exists(dst), reason: 'info target present' }) });
+      { expectedProject: proj, expectedTarget: dst, labels: ['info'], verify: (res) => ({ ok: exists(dst) && /^size: \d+$/m.test(res.text ?? ''), reason: 'info returned size metadata for target' }) });
     // delete the file we created
     cov.planned(T, transport, 1);
     await invoke(stepCtx, { mode: 'delete', path: dst },
@@ -129,7 +129,7 @@ export async function runFileManagerSuite(server, F, rec, cov, ctx) {
   // info on a real file returns metadata text (size/isFile)
   cov.planned(T, transport, 1);
   await invoke(A, { mode: 'info', path: path.join(F.A, 'marker.txt') },
-    { expectedProject: 'A', expectedTarget: path.join(F.A, 'marker.txt'), labels: ['info'], verify: () => ({ ok: exists(path.join(F.A, 'marker.txt')), reason: 'info on existing file' }) });
+    { expectedProject: 'A', expectedTarget: path.join(F.A, 'marker.txt'), labels: ['info'], verify: (res) => ({ ok: exists(path.join(F.A, 'marker.txt')) && /^size: \d+$/m.test(res.text ?? ''), reason: 'info on existing file returned size metadata' }) });
   // recovery: a normal mkdir after errors still works
   cov.planned(T, transport, 1);
   await invoke(A, { mode: 'mkdir', path: path.join(F.A, 'fm-recovery') },

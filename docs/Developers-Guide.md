@@ -406,8 +406,8 @@ Do not use `target`/`fileScope` for `restore` or `history`; those use `symbol`/`
 
 Runs `bash -c <command>` and returns a terminal-style transcript.
 
-- First line is the prompt: `<cwd>$ <command>`.
-- Last line is the status: `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started. `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening.
+- First line is the prompt: `<cwd>$ <command>`, always exactly one line: a backslash, CR or LF in the cwd or the command is shown as `\\`, `\r` or `\n`. The command itself runs exactly as given — heredocs and multi-line scripts work; only their display is escaped — so line 1 is the prompt, the last line is the status, and everything between is output.
+- Last line is the status: `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (checked before `cwd` is validated, so the prompt then shows `cwd` as requested and nothing throws). `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening. When a background child still holds the pipes 250 ms after the shell exited they are cut, and the shell's own status carries `; output after exit cut off` (`[exit code 0; output after exit cut off]`); anything written after the cut is not in the transcript.
 - A non-zero exit is data on the status line, not a tool error. The error channel is only for the tool itself failing: invalid `cwd`, `bash not found.`, spawn failure.
 - `timeout` defaults to `bash_timeout_seconds` (120) and is clamped to `bash_max_timeout_seconds` (600); both live under `### Advanced`.
 - Output is returned in full, rendered as it arrives the way a terminal shows it: `\r`, backspace, erase-in-line and cursor-to-column are modelled per line (cells are code points, so a tab or a wide character is one cell); colours and other sequences, control strings (OSC/DCS/SOS/PM/APC, newlines included) and stray control bytes are removed.
@@ -434,13 +434,14 @@ Project root resolution answers:
 
 > Where should project-scoped state such as `.mcp/symbols.db` live?
 
-Resolution ladder:
+Resolution ladder (`ProjectContext`, strongest first — see `docs/ARCHITECTURE.md` §5.8):
 
-1. Git repo from the file path or cwd
-2. MCP roots / allowed directories
-3. Project markers such as `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, etc.
-4. Explicit project registry
-5. Global fallback at `~/.zenith-mcp/`
+1. Explicit binding via `initProject` (in-memory, sticky for the session)
+2. Explicit project registry (`### Projects` in `~/.zenith-mcp/config`), matched against the tool-call path, the allowed directories, or the caller's process-tree cwd
+3. Detected boundary from the same evidence — a git root first, else project markers such as `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, etc. A detected root selects scope only; it never hosts a project-local `.mcp/symbols.db`
+4. Global fallback at `~/.zenith-mcp/`
+
+MCP Roots are not consulted. Allowed directories are detection hints (and, with `Sandbox: enabled`, the access boundary); `refresh()` has no production caller.
 
 Never let project-root fallback expand filesystem permissions. Only `allowedDirectories` control access.
 

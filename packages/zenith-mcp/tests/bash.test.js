@@ -7,10 +7,11 @@
  * resolves without realpath, and on platforms where the temp root is a
  * symlink (macOS /var → /private/var) the two would otherwise disagree.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 
 function mkTmpDir() {
     return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bash-test-')));
@@ -98,6 +99,11 @@ describe('bash tool', () => {
         return result.content[0].text;
     }
 
+    // The prompt is one line by contract: backslash, CR and LF in the cwd or the
+    // command are shown escaped (`\\`, `\r`, `\n`); the command itself runs as given.
+    const escapePrompt = (value) => value.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+    const promptOf = (command, cwd = real) => `${escapePrompt(cwd)}$ ${escapePrompt(command)}`;
+
     // Contract: name `bash`, title `Bash`, the exact description, destructive annotations.
     it('registers as bash with the contract title, description and annotations', () => {
         expect(registration.name).toBe('bash');
@@ -175,7 +181,7 @@ describe('bash tool', () => {
     it('merges stderr into the output', async () => {
         const cmd = 'echo out; echo err 1>&2; echo out2';
         const text = await run({ command: cmd, cwd: tmpDir });
-        const body = text.slice(`${real}$ ${cmd}\n`.length, -'[exit code 0]'.length).split('\n');
+        const body = text.slice(`${promptOf(cmd)}\n`.length, -'[exit code 0]'.length).split('\n');
         expect(body.sort()).toEqual(['', 'err', 'out', 'out2']);
         expect(text.indexOf('\nout\n')).toBeLessThan(text.indexOf('\nout2\n'));
         expect(text.endsWith('\n[exit code 0]')).toBe(true);
@@ -212,85 +218,127 @@ describe('bash tool', () => {
         await expect(run({ command: 'echo hi\0', cwd: tmpDir })).rejects.toThrow(/Command contains null byte\./);
     });
 
+    // Contract prompt: line 1 is the prompt, the last line is the status, everything
+    // between is output. A multi-line command runs exactly as given and is shown on
+    // the one prompt line with its line breaks escaped, so no line of the command can
+    // appear where output or the status line belongs.
+    it('shows a multi-line command escaped on the one prompt line and runs it unchanged', async () => {
+        expect(await run({ command: 'for i in 1 2; do\n  echo "$i"\ndone', cwd: tmpDir }))
+            .toBe(`${real}$ for i in 1 2; do\\n  echo "$i"\\ndone\n1\n2\n[exit code 0]`);
+        expect(await run({ command: "cat <<'EOF'\nhi\nEOF", cwd: tmpDir }))
+            .toBe(`${real}$ cat <<'EOF'\\nhi\\nEOF\nhi\n[exit code 0]`);
+        expect(await run({ command: 'echo a\r\necho b', cwd: tmpDir }))
+            .toBe(`${real}$ echo a\\r\\necho b\na\nb\n[exit code 0]`);
+    });
+
+    // Contract prompt: the backslash is escaped too, so a literal `\n` in the command
+    // (`\\n` on the prompt) cannot be mistaken for a line break (`\n` on the prompt).
+    it('escapes backslashes on the prompt so a literal \\n and a line break stay distinct', async () => {
+        expect(await run({ command: "printf 'a\\nb\\n'", cwd: tmpDir })).toBe(`${real}$ printf 'a\\\\nb\\\\n'\na\nb\n[exit code 0]`);
+        expect(await run({ command: "printf 'a\nb\n'", cwd: tmpDir })).toBe(`${real}$ printf 'a\\nb\\n'\na\nb\n[exit code 0]`);
+    });
+
+    // Contract prompt: a line of the command that looks like a status line stays on the
+    // prompt line; the real status line — different here — is the last line.
+    it('keeps a forged status line inside the command off the output and status positions', async () => {
+        const lines = (await run({ command: 'echo out\n[exit code 0]\nexit 3', cwd: tmpDir })).split('\n');
+        expect(lines[0]).toBe(`${real}$ echo out\\n[exit code 0]\\nexit 3`);
+        expect(lines[1]).toBe('out');
+        expect(lines[lines.length - 1]).toBe('[exit code 3]');
+        expect(lines.filter((line) => line === '[exit code 0]')).toEqual([]);
+    });
+
+    // Contract prompt: a directory name may contain a newline; the prompt is still one line.
+    it('escapes a line break in the cwd on the prompt line', async () => {
+        const dir = path.join(tmpDir, 'two\nlines');
+        fs.mkdirSync(dir);
+        const realDir = fs.realpathSync(dir);
+        const lines = (await run({ command: 'pwd', cwd: dir })).split('\n');
+        expect(lines[0]).toBe(`${realDir.replace(/\n/g, '\\n')}$ pwd`);
+        expect(lines[0]).not.toContain('\n');
+        expect(lines.slice(1, -1).join('\n')).toBe(realDir);
+        expect(lines[lines.length - 1]).toBe('[exit code 0]');
+    });
+
     // Contract sanitize c: SGR and OSC (title) sequences are stripped.
     it('strips ANSI colour and OSC sequences', async () => {
         const cmd = "printf '\\033[31mred\\033[0m\\n\\033]0;title\\007x\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nred\nx\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nred\nx\n[exit code 0]`);
     });
 
     // Contract sanitize d: \r returns the cursor to column 0 and later text overwrites.
     it('replays carriage returns as overwrites', async () => {
         const cmd = "printf 'Progress 10%%\\rProgress 100%%\\rDone\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nDoneress 100%\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nDoneress 100%\n[exit code 0]`);
     });
 
     // Contract sanitize b + d: \r then erase-to-end-of-line drops the old text.
     it('honours erase-to-end-of-line after a carriage return', async () => {
         const cmd = "printf 'Progress 100%%\\r\\033[KDone\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nDone\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nDone\n[exit code 0]`);
     });
 
     // Contract sanitize d: CRLF line endings render as plain lines.
     it('renders CRLF as LF', async () => {
         const cmd = "printf 'a\\r\\nb\\r\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\na\nb\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\na\nb\n[exit code 0]`);
     });
 
     // Contract sanitize a + e: SOH and DEL are removed, tab stays.
     it('removes control characters but keeps tabs', async () => {
         const cmd = "printf 'a\\001b\\177c\\td\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nabc\td\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nabc\td\n[exit code 0]`);
     });
 
     // Contract sanitize c: a control string runs to its terminator, newlines included —
     // the payload never reaches the transcript.
     it('swallows an OSC payload that spans lines', async () => {
         const cmd = "printf 'before\\033]0;hidden\\npayload\\007after\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nbeforeafter\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nbeforeafter\n[exit code 0]`);
     });
 
     // Contract sanitize c: a control string never terminated swallows the rest of the output.
     it('swallows everything after an unterminated OSC', async () => {
         const cmd = "printf 'shown\\n\\033]0;title\\nnext\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nshown\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nshown\n[exit code 0]`);
     });
 
     // Contract sanitize c: DCS (e.g. sixel) payloads are control strings too, ended by ST.
     it('swallows a DCS payload up to ST', async () => {
         const cmd = "printf 'a\\033Pq#0;2;0;0;0~~\\033\\\\b\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nab\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nab\n[exit code 0]`);
     });
 
     // Contract sanitize d/e: a control byte occupies no cell, so it cannot shift a replay.
     it('does not let a removed control character shift a carriage-return replay', async () => {
         const cmd = "printf 'abc\\r\\007X\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nXbc\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nXbc\n[exit code 0]`);
     });
 
     // Contract sanitize b: EL 1 blanks the line from its start through the cursor cell.
     it('honours erase-from-start-of-line', async () => {
         const cmd = "printf 'abcdef\\rXY\\033[1KZ\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\n  Zdef\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\n  Zdef\n[exit code 0]`);
     });
 
     // Contract sanitize b: EL 2 blanks the whole line and leaves the cursor where it was.
     it('honours erase-whole-line', async () => {
         const cmd = "printf 'x\\033[2Ky\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\n y\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\n y\n[exit code 0]`);
     });
 
     // Contract sanitize d: cursor-to-column (as Node's readline.cursorTo emits) and backspace move the cursor.
     it('honours cursor-to-column and backspace', async () => {
         const cha = "printf 'spin\\033[2K\\033[1Gdone\\n'";
-        expect(await run({ command: cha, cwd: tmpDir })).toBe(`${real}$ ${cha}\ndone\n[exit code 0]`);
+        expect(await run({ command: cha, cwd: tmpDir })).toBe(`${promptOf(cha)}\ndone\n[exit code 0]`);
         const bs = "printf 'abc\\bX\\n'";
-        expect(await run({ command: bs, cwd: tmpDir })).toBe(`${real}$ ${bs}\nabX\n[exit code 0]`);
+        expect(await run({ command: bs, cwd: tmpDir })).toBe(`${promptOf(bs)}\nabX\n[exit code 0]`);
     });
 
     // Contract sanitize d: cells are code points — an overwrite after \r replaces whole characters.
     it('overwrites whole code points, not code units', async () => {
         const cmd = "printf 'héllo 🚀\\rHE\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nHEllo 🚀\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nHEllo 🚀\n[exit code 0]`);
     });
 
     // Contract sanitize d: cursor motion never creates cells — a move past the end lands at the end,
@@ -298,31 +346,31 @@ describe('bash tool', () => {
     it('clamps cursor motion to the line and never allocates for it', async () => {
         const t0 = Date.now();
         const cmd = "printf 'a\\033[10Gb\\n'; printf 'x\\033[200000000G\\n'; printf 'y\\033[200000000Cz\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nab\nx\nyz\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nab\nx\nyz\n[exit code 0]`);
         expect(Date.now() - t0).toBeLessThan(2000);
     });
 
     // Contract sanitize c: after an intermediate byte the next final byte ends the ESC sequence — `ESC ( P` is not a DCS.
     it('does not mistake a final byte after an intermediate for a control-string introducer', async () => {
         const cmd = "printf 'before\\033(Pafter\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nbeforeafter\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nbeforeafter\n[exit code 0]`);
     });
 
     // Contract sanitize c: a C0 control inside a CSI executes and the sequence goes on; CAN abandons a control string.
     it('handles controls embedded in sequences the way the parser model does', async () => {
         const bel = "printf 'before\\033[31\\007mred\\033[0m\\n'";
-        expect(await run({ command: bel, cwd: tmpDir })).toBe(`${real}$ ${bel}\nbeforered\n[exit code 0]`);
+        expect(await run({ command: bel, cwd: tmpDir })).toBe(`${promptOf(bel)}\nbeforered\n[exit code 0]`);
         const nl = "printf 'a\\033[3\\nmb\\n'";
-        expect(await run({ command: nl, cwd: tmpDir })).toBe(`${real}$ ${nl}\na\nb\n[exit code 0]`);
+        expect(await run({ command: nl, cwd: tmpDir })).toBe(`${promptOf(nl)}\na\nb\n[exit code 0]`);
         const can = "printf 'before\\033]0;title\\030after\\n'";
-        expect(await run({ command: can, cwd: tmpDir })).toBe(`${real}$ ${can}\nbeforeafter\n[exit code 0]`);
+        expect(await run({ command: can, cwd: tmpDir })).toBe(`${promptOf(can)}\nbeforeafter\n[exit code 0]`);
     });
 
     // Contract capture: a colour sequence on every line costs nothing but the text — 200000 coloured lines, byte for byte.
     it('renders 200000 coloured lines exactly', async () => {
         const cmd = "yes $'\\e[31mx\\e[0m' | head -n 200000";
         const text = await run({ command: cmd, cwd: tmpDir });
-        expect(text).toBe(`${real}$ ${cmd}\n${'x\n'.repeat(200_000)}[exit code 0]`);
+        expect(text).toBe(`${promptOf(cmd)}\n${'x\n'.repeat(200_000)}[exit code 0]`);
     }, SLOW);
 
     // Contract sanitize c: 8-bit CSI (U+009B, which UTF-8 encodes as C2 9B) is stripped too.
@@ -330,7 +378,7 @@ describe('bash tool', () => {
     // UTF-8 terminal shows it — so the 8-bit form that survives decoding is C2 9B.
     it('strips 8-bit CSI sequences', async () => {
         const cmd = "printf '\\xc2\\x9b31mblue\\xc2\\x9b0m\\n'";
-        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${real}$ ${cmd}\nblue\n[exit code 0]`);
+        expect(await run({ command: cmd, cwd: tmpDir })).toBe(`${promptOf(cmd)}\nblue\n[exit code 0]`);
     });
 
     // Contract capture: one streaming decoder per stream — multibyte sequences split across chunks decode intact.
@@ -339,7 +387,7 @@ describe('bash tool', () => {
         const text = await run({ command: cmd, cwd: tmpDir });
         expect(text).not.toContain('�');
         const lines = text.split('\n');
-        expect(lines[0]).toBe(`${real}$ ${cmd}`);
+        expect(lines[0]).toBe(`${promptOf(cmd)}`);
         expect(lines[lines.length - 1]).toBe('[exit code 0]');
         const body = lines.slice(1, -1);
         expect(body).toHaveLength(20000);
@@ -444,6 +492,25 @@ describe('bash tool', () => {
         expect(await pidGone(Number(lines[1]), 1000)).toBe(true);
     }, SLOW);
 
+    // Contract timeout: once the group is observed gone the SIGKILL escalation is off — a
+    // pgid reused meanwhile must not be hit. The shell's TERM trap exits it 1.8 s into the
+    // 2 s grace while a job moved to its own group (`set -m`) still holds the pipes, so the
+    // call is still waiting out the 250 ms exit grace when the SIGKILL timer would fire.
+    posixOnly('does not send SIGKILL once the group is observed gone', async () => {
+        const kill = vi.spyOn(process, 'kill');
+        try {
+            const lines = (await run({ command: "set -m; sleep 4 & set +m; trap 'sleep 1.8; exit 0' TERM; echo $$; sleep 30", cwd: tmpDir, timeout: 1 })).split('\n');
+            expect(lines[lines.length - 1]).toBe('[timed out after 1s; process group killed]');
+            const pid = Number(lines[1]);
+            expect(Number.isInteger(pid)).toBe(true);
+            expect(kill).toHaveBeenCalledWith(-pid, 'SIGTERM');
+            expect(kill.mock.calls.filter(([, sig]) => sig === 'SIGKILL')).toEqual([]);
+            expect(await pidGone(pid, 1000)).toBe(true);
+        } finally {
+            kill.mockRestore();
+        }
+    }, SLOW);
+
     // Contract cancel: aborting the request's signal stops the command like a timeout does.
     posixOnly('kills the process group when the request is cancelled', async () => {
         const controller = new AbortController();
@@ -466,13 +533,46 @@ describe('bash tool', () => {
         expect(fs.existsSync(marker)).toBe(false);
     });
 
+    // Contract cancel: the `[cancelled]` result comes before any validation that could
+    // throw — a cwd the sandbox refuses, or one that does not exist, is never reached.
+    it('returns [cancelled] for an already-cancelled request even when the cwd would not validate', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const missing = path.join(tmpDir, 'missing');
+        const result = await handler({ command: 'true', cwd: missing }, { signal: controller.signal });
+        expect(result.content[0].text).toBe(`${missing}$ true\n[cancelled]`);
+
+        const mod = await import('../dist/tools/bash.js');
+        const { server, calls } = captureHandler();
+        mod.register(server, {
+            validatePath: async () => { throw new Error('Access denied'); },
+            getAllowedDirectories: () => [tmpDir],
+        });
+        const refused = await calls[0].handler({ command: 'true', cwd: tmpDir }, { signal: controller.signal });
+        expect(refused.content[0].text).toBe(`${real}$ true\n[cancelled]`);
+        await expect(calls[0].handler({ command: 'true', cwd: tmpDir })).rejects.toThrow(/Access denied/);
+    });
+
     // Contract wait: a background child holding the pipes after the shell has exited
-    // does not hang the tool — the exit grace cuts the pipes and the transcript is complete.
+    // does not hang the tool — the exit grace cuts the pipes, the shell's own status is
+    // reported, and the status line says the pipes were cut.
     it('returns promptly when a background child keeps the pipes open', async () => {
         const t0 = Date.now();
         const text = await run({ command: 'sleep 3 & echo started', cwd: tmpDir });
         expect(Date.now() - t0).toBeLessThan(1500);
-        expect(text).toBe(`${real}$ sleep 3 & echo started\nstarted\n[exit code 0]`);
+        expect(text).toBe(`${real}$ sleep 3 & echo started\nstarted\n[exit code 0; output after exit cut off]`);
+    }, SLOW);
+
+    // Contract wait: what a holder writes after the cut is not in the transcript, and the
+    // status line's marker is how a reader can tell. A signal death carries it the same way.
+    it('marks the status line when output after the shell exited was cut off', async () => {
+        const cmd = '(sleep 1; echo late) & echo started; exit 3';
+        const text = await run({ command: cmd, cwd: tmpDir });
+        expect(text).toBe(`${real}$ ${cmd}\nstarted\n[exit code 3; output after exit cut off]`);
+        if (process.platform !== 'win32') {
+            const sig = '(sleep 1; echo late) & kill -SEGV $$';
+            expect(await run({ command: sig, cwd: tmpDir })).toBe(`${real}$ ${sig}\n[terminated by SIGSEGV; output after exit cut off]`);
+        }
     }, SLOW);
 
     // Contract status: a signal death renders `[terminated by <signal>]`.
@@ -490,9 +590,31 @@ describe('bash tool', () => {
         expect(text).toBe(`${real}$ cat\n[exit code 0]`);
     });
 
+    // Contract spawn: the program is the resolver's absolute, executable bash — never
+    // anything the caller named (the strict schema has no such field). bash sets `$0`
+    // to the argv[0] it was spawned with, which is the path the tool passed.
+    posixOnly('spawns the absolute bash path that the resolver found', async () => {
+        const lines = (await run({ command: 'echo "$0"', cwd: tmpDir })).split('\n');
+        const shell = lines[1];
+        expect(path.isAbsolute(shell)).toBe(true);
+        expect(path.basename(shell)).toBe('bash');
+        expect(() => fs.accessSync(shell, fs.constants.X_OK)).not.toThrow();
+        expect(registration.schema.inputSchema.safeParse({ command: 'ls', shell: '/bin/sh' }).success).toBe(false);
+    });
+
     // Contract shutdown: after the first spawn the sweep is hooked to exit and to the shutdown signals.
     it('installs the shutdown sweep once a command has run', async () => {
         await run({ command: 'true', cwd: tmpDir });
         expect(shutdownListenersInstalled()).toBe(true);
+    });
+});
+
+// The documented exit-grace contract must say what the code and the timeout cases above
+// pin: a stop landing inside the 250 ms grace reports the stop, not the shell's own status.
+describe('bash docs', () => {
+    const architecture = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/ARCHITECTURE.md'), 'utf8');
+
+    it('document that a timeout or cancellation inside the exit grace wins over the shell status', () => {
+        expect(architecture).toContain('unless the timeout or a cancellation lands inside that window, in which case the stop takes over: the pending grace is dropped, the group is killed, and the status line says so');
     });
 });

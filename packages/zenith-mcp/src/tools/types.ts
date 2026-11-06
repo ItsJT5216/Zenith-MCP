@@ -27,7 +27,13 @@ type ToolResult = {
     content: ToolContent[];
 };
 
-type ToolHandler<TArgs> = (args: TArgs) => Promise<ToolResult> | ToolResult;
+/** Per-call context the transport hands over with the arguments (the SDK's `extra`). */
+export type ToolCallExtra = {
+    /** Aborted when the client cancels the request. */
+    signal?: AbortSignal;
+};
+
+type ToolHandler<TArgs> = (args: TArgs, extra?: ToolCallExtra) => Promise<ToolResult> | ToolResult;
 
 type ToolRegistration = {
     title?: string;

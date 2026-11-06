@@ -6,6 +6,7 @@ import { createInterface } from 'readline';
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 import { normalizePath, expandHome } from './path-utils.js';
+import { getCallWorkingDirectory } from './project-context.js';
 
 function hasCode(e: unknown): e is { code: string } {
     return typeof e === 'object' && e !== null && 'code' in e && typeof (e as Record<string, unknown>).code === 'string';
@@ -79,11 +80,11 @@ export function createFilesystemContext(initialAllowedDirectories: string[] = []
         return false;
     }
 
-    async function validatePath(requestedPath: string) {
+    async function validatePath(requestedPath: string): Promise<string> {
         const expandedPath = expandHome(requestedPath);
         const absolute = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
-            : path.resolve(process.cwd(), expandedPath);
+            : path.resolve(getCallWorkingDirectory(context) ?? process.cwd(), expandedPath);
         normalizePath(absolute);
 
         try {
@@ -142,7 +143,7 @@ export function createFilesystemContext(initialAllowedDirectories: string[] = []
         const expandedPath = expandHome(requestedPath);
         const absolute = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
-            : path.resolve(process.cwd(), expandedPath);
+            : path.resolve(getCallWorkingDirectory(context) ?? process.cwd(), expandedPath);
         normalizePath(absolute);
         const { realAncestor, missingSegments } = await resolveNearestExistingAncestor(absolute);
         normalizePath(realAncestor);
@@ -170,7 +171,8 @@ export function createFilesystemContext(initialAllowedDirectories: string[] = []
         return resolvedTarget;
     }
 
-    return { getAllowedDirectories, setAllowedDirectories, setSandboxEnabled, validatePath, validateNewFilePath };
+    const context: FilesystemContext = { getAllowedDirectories, setAllowedDirectories, setSandboxEnabled, validatePath, validateNewFilePath };
+    return context;
 }
 
 export function formatSize(bytes: number): string {

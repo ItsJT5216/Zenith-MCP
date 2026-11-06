@@ -42,6 +42,8 @@ const LEGACY_ADVANCED_KEYS = new Set([
   "refactor_max_context",
   "refactor_version_ttl_hours",
   "session_ttl_ms",
+  "bash_timeout_seconds",
+  "bash_max_timeout_seconds",
   "auto_promote_sessions",
   "default_excludes",
   "sensitive_patterns",

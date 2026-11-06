@@ -46,6 +46,10 @@ export interface ZenithConfig {
     refactor_max_context: number;
     refactor_version_ttl_hours: number;
     session_ttl_ms: number;
+    /** Default wall-clock limit, in seconds, for a `bash` tool call that does not pass `timeout`. */
+    bash_timeout_seconds: number;
+    /** Upper bound, in seconds, on any `bash` tool call's timeout — a larger request is clamped to it. */
+    bash_max_timeout_seconds: number;
     default_excludes: string;
     sensitive_patterns: string;
     /**
@@ -93,6 +97,8 @@ export const DEFAULT_CONFIG: ZenithConfig = {
     refactor_max_context: 30,
     refactor_version_ttl_hours: 24,
     session_ttl_ms: 1_800_000,
+    bash_timeout_seconds: 120,
+    bash_max_timeout_seconds: 600,
     auto_promote_sessions: 0,
     default_excludes: DEFAULT_EXCLUDES_STR,
     sensitive_patterns: DEFAULT_SENSITIVE_STR,
@@ -252,6 +258,8 @@ export function configToRaw(config: ZenithConfig): RawConfig {
   entries.push(kv("refactor_max_context", config.advanced.refactor_max_context, String(config.advanced.refactor_max_context)));
   entries.push(kv("refactor_version_ttl_hours", config.advanced.refactor_version_ttl_hours, String(config.advanced.refactor_version_ttl_hours)));
   entries.push(kv("session_ttl_ms", config.advanced.session_ttl_ms, String(config.advanced.session_ttl_ms)));
+  entries.push(kv("bash_timeout_seconds", config.advanced.bash_timeout_seconds, String(config.advanced.bash_timeout_seconds)));
+  entries.push(kv("bash_max_timeout_seconds", config.advanced.bash_max_timeout_seconds, String(config.advanced.bash_max_timeout_seconds)));
   entries.push(kv("auto_promote_sessions", config.advanced.auto_promote_sessions, String(config.advanced.auto_promote_sessions)));
   entries.push(kv("default_excludes", config.advanced.default_excludes, config.advanced.default_excludes));
   entries.push(kv("sensitive_patterns", config.advanced.sensitive_patterns, config.advanced.sensitive_patterns));
@@ -262,6 +270,12 @@ export function configToRaw(config: ZenithConfig): RawConfig {
 // ---------------------------------------------------------------------------
 // rawToConfig — parser's RawConfig array -> typed config
 // ---------------------------------------------------------------------------
+
+/** A whole decimal integer in safe range, or NaN. Unlike parseInt, "45oops", "1.9" and "1e3" are not numbers. */
+function parseDecimalInteger(raw: string): number {
+  const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(n) ? n : NaN;
+}
 
 export function rawToConfig(raw: RawConfig): ZenithConfig {
   // Start from a deep copy of defaults so every field is guaranteed present.
@@ -446,6 +460,16 @@ export function rawToConfig(raw: RawConfig): ZenithConfig {
         case "session_ttl_ms": {
           const n = parseInt(raw_val, 10);
           if (!isNaN(n)) config.advanced.session_ttl_ms = n;
+          break;
+        }
+        case "bash_timeout_seconds": {
+          const n = parseDecimalInteger(raw_val);
+          if (n > 0) config.advanced.bash_timeout_seconds = n;
+          break;
+        }
+        case "bash_max_timeout_seconds": {
+          const n = parseDecimalInteger(raw_val);
+          if (n > 0) config.advanced.bash_max_timeout_seconds = n;
           break;
         }
         case "auto_promote_sessions": {

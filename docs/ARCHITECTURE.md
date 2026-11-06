@@ -80,7 +80,7 @@ All sources are written in TypeScript under `src/` in each package.
 - **Binary**: `zenith-mcp`
 - Runs as a persistent subprocess spawned by the MCP client.
 - Allocates a single `FilesystemContext` initialized with allowed paths passed via command-line arguments.
-- Leverages the MCP Roots Protocol (if supported by the client) to dynamically update the set of allowed directories at runtime.
+- Starts with or without allowed directories; MCP Roots are not used — project scope is derived per call by `ProjectContext` (§5.8).
 - First-run wizard routes to stderr to keep stdout clean for JSON-RPC.
 
 ### 3.2 HTTP Transport (Multi-Tenant)
@@ -116,23 +116,24 @@ To prevent directory traversal and unauthorized filesystem modifications:
 4. If the path falls outside allowed boundaries, an access-denied error is thrown before any filesystem operation.
 5. New file creation uses the `wx` (exclusive) flag to prevent symlink exploitation.
 6. Search, indexing, and directory-traversal tools apply `isSensitive()` filtering to block credential-like files (`.env`, `*.pem`, `*.key`, `*credentials*`, `*secret*`, etc.) via configurable `minimatch` patterns.
+7. Enforcement is opt-in: the top-level `Sandbox` config flag (default `disabled`) turns the allowed directories from project-context hints into the enforced boundary. Even then the `bash` tool (§6.12) is the exception: `validatePath()` gates only its `cwd`; the command runs with the server process's privileges, and `bash: disabled` under `### Tools` is the control.
 
 ---
 
 ## 5. Core Architectural Modules
 
-### 5.1 `core/server.ts` — Server Factory
+### 5.1 `core/server.ts` — Tool Orchestration
 
 ```typescript
-export function createFilesystemServer(ctx: FilesystemContext): McpServer
+export function registerEnabledTools(toolServer: ToolServer, ctx: ToolContext): void
 ```
 
-- Creates the `McpServer` instance with version read from `package.json` at runtime.
-- **`TOOL_REGISTRY`** constant: Array of `{ name, register }` — single source of truth for all 11 tools.
+- Each entrypoint constructs its own `McpServer` (HTTP: one per request; stdio: one per connection) and passes it in as the SDK-agnostic `ToolServer`; `withCallerEnvironmentPing` wraps every handler and forwards the SDK's per-call `extra` (the cancellation signal) to it.
+- **`TOOL_REGISTRY`** constant: Array of `{ name, register }` — single source of truth for all 12 tools.
 - Config-driven tool enable/disable via `syncedConfig.tools[entry.name]`.
 - Loads adapter settings and configures adapter registry when enabled.
 - Retrieval code exists under `src/retrieval/`, but it is disabled by default and excluded from the main package compile.
-- Wires MCP Roots handlers via `attachRootsHandlers()`.
+- No MCP Roots wiring — scope is derived per call (§5.8).
 
 ### 5.2 `core/lib.ts` — Filesystem Access Layer
 
@@ -188,11 +189,14 @@ All edits in a file bundle succeed or fail atomically. Post-edit syntax error de
 
 ### 5.8 `core/project-context.ts` — Project Root Resolution
 
-`ProjectContext` is the single routing authority for where project-scoped state (`.mcp/symbols.db`) lives. Resolution is deliberately explicit — there is no automatic git or marker detection:
+`ProjectContext` is the single routing authority for project scope and for where project-scoped state (`.mcp/symbols.db`) lives. Scope resolution is tiered, strongest first — a weaker signal never displaces a stronger one:
 
-1. Explicit binding via `initProject` (in-memory, sticky for the session)
-2. Config-file registry matching (`~/.zenith-mcp/config`, `### Projects` section — the authoritative, persistent registry)
-3. Global fallback at `~/.zenith-mcp/` for any unregistered allowed path
+1. Explicit binding via `initProject` (in-memory, sticky for the session; no production caller today — reachable from tests only)
+2. Config-file registry matching (`~/.zenith-mcp/config`, `### Projects` section — the authoritative, persistent registry), matched against tool-call paths, granted allowed directories, or the caller's process-tree cwd
+3. Detected boundary: a git or marker root found from tool-call path evidence, granted allowed directories, or the caller's process-tree cwd (`pingCallerEnvironment()` at the dispatch seam). Detection is re-evaluated on each call, except that explicit bindings and bindings selected by configured or granted roots are kept while valid
+4. Global fallback at `~/.zenith-mcp/` for anything unregistered and undetected — a fallback, never a refusal
+
+Detected roots select scope only. They do not grant persistence eligibility: only explicit and registry bindings can host a project-local `.mcp/symbols.db`, and a detected root routes persistence to the global DB until the project is registered (or auto-promoted). MCP Roots are not consulted (§3.1), and `refresh()` has no production caller.
 
 **Important**: Project root resolution never expands filesystem permissions. Only `allowedDirectories` control access.
 
@@ -370,6 +374,24 @@ Discriminated union on `mode`:
 | `restore` | `symbol`, `file`, `version`, `dryRun` | Rollback to a version snapshot |
 | `history` | `symbol`, `file` | View symbol version history |
 
+### 6.12 `bash`
+
+Run a bash command and return a terminal-style transcript:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `command` | string | Command to run with `bash -c` (required) |
+| `cwd` | string | Working directory (validated); defaults to the project root, else the first allowed directory, else the server's working directory |
+| `timeout` | integer | Seconds (≥ 1); defaults to `bash_timeout_seconds`, clamped to `bash_max_timeout_seconds` |
+
+The default `cwd` is resolved through `ProjectContext` (§5.8) — project root, else the first allowed directory, else the server's working directory — and an explicit `cwd` is validated like any other path. The command runs in its own process group with stdin closed; on timeout the whole group receives SIGTERM, then SIGKILL after 2 s, and whatever output was captured is still returned. stdout and stderr are merged in arrival order and sanitized the way a terminal renders them (ANSI/OSC escapes stripped, `\r` returns to column 0 and overwrites, erase-line sequences honoured so progress bars collapse to their final frame, control bytes other than tab removed, UTF-8 decoded correctly across chunk boundaries), and the output is returned in full. The result is always one prompt line `<cwd>$ <command>` (a backslash, CR or LF in the cwd or the command is shown as `\\`, `\r` or `\n`; the command itself runs as given), the output, then a status line — `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (`[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening; `; output after exit cut off` is appended to the shell's own status when the exit grace cut the pipes, see below) — so a non-zero exit is data rather than an error, the error channel is reserved for the tool itself failing (invalid `cwd`, `bash not found.`, spawn failure), and the timeout default (120 s) and cap (600 s) come from the `bash_timeout_seconds` / `bash_max_timeout_seconds` config keys (§8).
+
+An explicit `cwd` is path evidence for project detection exactly like a file tool's path: it rebinds `ProjectContext` when it lies in a different project. The path sandbox (§4) gates only that `cwd` — the command itself runs with the server process's privileges and can reach any file or resource the server can.
+
+Stopping a command — on timeout, or when the client cancels the request (the SDK's abort signal, forwarded to every tool by `withCallerEnvironmentPing`) — sends SIGTERM to the process group, then SIGKILL 2 s later; on Windows, which has no process groups, `taskkill /T /F` and its exit code stand in for both. The call completes only once the group is observed empty or the SIGKILL has gone out, so a descendant in the group that ignores SIGTERM cannot survive behind a `[timed out …; process group killed]` or `[cancelled; process group killed]` status line. The kill reaches the command's process group; a job the command moved to another group (`set -m`) is not reached. A background child that outlives the shell while holding its pipes is cut off 250 ms after the shell exits, and the shell's own status is reported with `; output after exit cut off` appended (`[exit code 0; output after exit cut off]`), so a reader can tell that anything written after the cut is missing — unless the timeout or a cancellation lands inside that window, in which case the stop takes over: the pending grace is dropped, the group is killed, and the status line says so (`[timed out …; process group killed]` / `[cancelled; process group killed]`), because the call did reach its deadline with the pipes still open. A shell whose call is in flight is tracked and swept — SIGKILL to its group — when the server exits or receives SIGTERM/SIGINT/SIGHUP; the listener runs first and re-raises the signal with its default disposition only when it is the sole listener. What outlives its call — a service the command started detached — is not tracked and not swept.
+
+Rendering follows ECMA-48 structurally rather than by pattern: CSI and ESC sequences are recognised whether or not a pipe chunk boundary splits them; control strings (OSC/DCS/SOS/PM/APC) are swallowed with their payload up to ST or BEL — newlines included, so a title or hyperlink payload never reaches the transcript; stray control bytes are removed. What is modelled per line, with cells being code points (a tab or a wide character is one cell): printable text, `\r`, backspace, erase-in-line (EL 0/1/2), cursor-to-column (CHA) and cursor back/forward (CUB/CUF); colours and every other sequence are dropped. Output is rendered as it arrives straight into the transcript, completed pieces joined in batches, so memory stays at roughly the transcript's own size; cursor motion never creates cells (a move past the end of the line lands at the end), so nothing in the output can make the renderer allocate beyond the text it received.
+
 ---
 
 ## 7. Client Configuration & Adapters
@@ -416,6 +438,8 @@ refactor_max_chars: 30000
 refactor_max_context: 30
 refactor_version_ttl_hours: 24
 session_ttl_ms: 1800000
+bash_timeout_seconds: 120
+bash_max_timeout_seconds: 600
 default_excludes: node_modules,.git,.next,...
 sensitive_patterns: **/.env,**/*.pem,...
 ```

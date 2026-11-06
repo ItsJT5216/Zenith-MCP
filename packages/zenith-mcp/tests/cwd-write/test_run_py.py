@@ -32,7 +32,7 @@ class RunPyLauncher(unittest.TestCase):
         self.shim = os.path.join(self.bindir, 'node')
         with open(self.shim, 'w') as f:
             f.write(SHIM)
-        os.chmod(self.shim, 0o755)
+        os.chmod(self.shim, 0o700)
         self.out = os.path.join(self.tmp, 'out')
         self.log = os.path.join(self.tmp, 'run.log')
 

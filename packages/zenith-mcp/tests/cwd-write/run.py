@@ -41,8 +41,8 @@ cmd = [NODE, RUN,
        '--repetitions', args.repetitions,
        '--transports', args.transports,
        '--base', base]
-if args.home_base: cmd += ['--home-base', args.home_base]
-if args.fixtures_base: cmd += ['--fixtures-base', args.fixtures_base]
+if args.home_base: cmd += ['--home-base', os.path.abspath(args.home_base)]
+if args.fixtures_base: cmd += ['--fixtures-base', os.path.abspath(args.fixtures_base)]
 
 env = {
     'PATH': '/usr/bin:/bin',

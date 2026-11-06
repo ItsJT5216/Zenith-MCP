@@ -9,6 +9,7 @@
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,14 +19,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUN_PY = os.path.join(HERE, 'run.py')
 
 SHIM = """#!/bin/sh
-printf 'SHIM=%s\\n' "$(python3 -c 'import json,os,sys; print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "home": os.environ.get("HOME")}))' "$@")"
-"""
+printf 'SHIM=%%s\\n' "$(%s -c 'import json,os,sys; print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "home": os.environ.get("HOME")}))' "$@")"
+""" % shlex.quote(sys.executable)
 
 
 @unittest.skipUnless(os.name == 'posix', 'run.py uses the posix resource module')
 class RunPyLauncher(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='cwd-write-runpy-')
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix='cwd-write-runpy-'))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.bindir = os.path.join(self.tmp, 'bin')
         os.makedirs(self.bindir)
@@ -77,6 +78,16 @@ class RunPyLauncher(unittest.TestCase):
         self.assertTrue(os.path.isdir(base))
         self.assertEqual(rec['cwd'], base)
         self.assertEqual(rec['argv'][rec['argv'].index('--base') + 1], base)
+
+    def test_relative_home_and_fixtures_bases_resolve_from_caller(self):
+        proc = self.launch({'ZENITH_NODE': self.shim},
+                           extra=('--home-base', 'homes', '--fixtures-base', 'fixtures'))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        rec = self.shim_record()
+        self.assertEqual(rec['cwd'], os.path.join(self.out, 'base'))
+        for option, name in (('--home-base', 'homes'), ('--fixtures-base', 'fixtures')):
+            self.assertEqual(rec['argv'][rec['argv'].index(option) + 1],
+                             os.path.join(self.tmp, name))
 
     def test_missing_node_fails_with_a_clear_message(self):
         proc = self.launch({'ZENITH_NODE': os.path.join(self.tmp, 'no-such-node'), 'PATH': self.tmp})

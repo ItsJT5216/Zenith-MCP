@@ -168,7 +168,13 @@ The server also starts with none: tools then resolve project scope per call (pat
 
 By default the allowed directories are project-context hints and do not restrict access. `Sandbox: enabled` in the config file turns them into the enforced boundary:
 
-> **Why no fallback?** With the sandbox enabled, allowed directories are a strict security boundary — they determine what the AI can read and write through the filesystem tools. The server intentionally does *not* fall back to `process.cwd()` or auto-detected git roots for allowed directories, because that could accidentally expose sensitive files. A separate "project root" resolver (used only for the symbol index and stash database) does have fallbacks (project registry → git/marker detection → global; see `docs/ARCHITECTURE.md` §5.8), but that layer never grants filesystem access.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:408d3895fb8404881910fe752e192439ce60442f7ac7fe8a707e57ee3c72dc89 -->
+
+> **Why no fallback?** With the sandbox enabled, allowed directories are a strict security boundary — they determine what the AI can read and write through the filesystem tools. The server intentionally does *not* fall back to `process.cwd()` or auto-detected git roots for allowed directories, because that could accidentally expose sensitive files. The project root is also the first working-directory choice when a `bash` call omits `cwd`; the selected directory is still validated against allowed directories when the sandbox is enabled. This working-directory selection does not grant filesystem authorization. For the symbol index, stash database, and other project-context uses, the separate "project root" resolver does have fallbacks (project registry → git/marker detection → global; see `docs/ARCHITECTURE.md` §5.8), but that layer never grants filesystem access.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ### How It Works
 1. **Server Startup** — the CLI directories are resolved, validated and recorded

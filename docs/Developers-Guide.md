@@ -86,7 +86,7 @@ All source code is written in TypeScript and resides inside the respective packa
   - stdio transport
   - One process, one `FilesystemContext`, one `McpServer`
   - CLI directories provide the baseline allowed-directory sandbox
-  - MCP Roots can replace the allowed directories at initialization/runtime
+  - Starts with or without directories; MCP Roots are not used (project scope is derived per call)
 
 - **`packages/zenith-mcp/src/server/http.ts`** → `dist/server/http.js` (binary: `zenith-mcp-http`)
   - Express HTTP server
@@ -98,12 +98,12 @@ All source code is written in TypeScript and resides inside the respective packa
 ### Core Orchestrator
 
 - **`packages/zenith-mcp/src/core/server.ts`**
-  - Creates the `McpServer`
-  - `TOOL_REGISTRY` constant: single source of truth for all 11 tools
+  - `registerEnabledTools(toolServer, ctx)` — each entrypoint creates its own `McpServer` and passes it in; `withCallerEnvironmentPing` forwards the SDK's per-call `extra` to every handler
+  - `TOOL_REGISTRY` constant: single source of truth for all 12 tools
   - Config-driven tool enable/disable
   - Loads adapter settings
   - Retrieval code exists under `src/retrieval/`, but it is disabled by default and excluded from the main package compile
-  - Wires MCP Roots handlers
+  - No MCP Roots wiring — project scope is derived per call by `ProjectContext`
 
 ### Core Modules (`packages/zenith-mcp/src/`)
 
@@ -149,6 +149,8 @@ Validation flow:
 7. Return the validated path
 
 If validation fails, the tool must fail before touching the filesystem.
+
+The [`bash`](#bash) tool is the one exception: `ctx.validatePath()` gates only its `cwd`. The command runs with the server's privileges and is not confined to the allowed directories.
 
 ### Sensitive File Filtering
 
@@ -323,6 +325,7 @@ Keep stash responses concise. Return the stash ID and only the failed edit indic
 | `file_manager` | mkdir/delete/move/info | `mode`, `path`, `source`, `destination` |
 | `stashRestore` | Retry/inspect/clear stashed edit/write failures | `mode: apply/restore/list/read`, `stashId`, `corrections`, `newPath`, `dryRun`, `type` |
 | `refactor_batch` | Cross-file symbol refactoring and symbol version rollback | `mode: query/loadDiff/apply/reapply/restore/history` |
+| `bash` | Run a bash command; terminal-style transcript, exit code reported as data | `command`, `cwd`, `timeout` |
 
 ### Tool Notes
 
@@ -351,7 +354,7 @@ Modes:
 
 No `roots` mode. No `listAllowed`.
 
-Allowed roots are negotiated through MCP Roots and exposed through context, not a public directory mode.
+Allowed directories come from the command line and are exposed through context, not a public directory mode.
 
 #### `search_files`
 
@@ -399,6 +402,24 @@ Do not document or call `load`; the mode is `loadDiff`.
 
 Do not use `target`/`fileScope` for `restore` or `history`; those use `symbol`/`file`.
 
+#### `bash`
+
+Runs `bash -c <command>` and returns a terminal-style transcript.
+
+- First line is the prompt: `<cwd>$ <command>`, always exactly one line: a backslash, CR or LF in the cwd or the command is shown as `\\`, `\r` or `\n`. The command itself runs exactly as given — heredocs and multi-line scripts work; only their display is escaped — so line 1 is the prompt, the last line is the status, and everything between is output.
+- Last line is the status: `[exit code N]`, `[terminated by SIGxxx]`, `[timed out after Ns; process group killed]`, `[cancelled; process group killed]`, or `[cancelled]` when the request was cancelled before the shell started (checked before `cwd` is validated, so the prompt then shows `cwd` as requested and nothing throws). `[exit code unknown]` is the fallback for an exit Node reports with neither a code nor a signal, which its `exit` event documents as never happening. When a background child still holds the pipes 250 ms after the shell exited they are cut, and the shell's own status carries `; output after exit cut off` (`[exit code 0; output after exit cut off]`); anything written after the cut is not in the transcript.
+- A non-zero exit is data on the status line, not a tool error. The error channel is only for the tool itself failing: invalid `cwd`, `bash not found.`, spawn failure.
+- `timeout` defaults to `bash_timeout_seconds` (120) and is clamped to `bash_max_timeout_seconds` (600); both live under `### Advanced`.
+- Output is returned in full, rendered as it arrives the way a terminal shows it: `\r`, backspace, erase-in-line and cursor-to-column are modelled per line (cells are code points, so a tab or a wide character is one cell); colours and other sequences, control strings (OSC/DCS/SOS/PM/APC, newlines included) and stray control bytes are removed.
+- stdin is closed. Start services detached with output redirected.
+- On timeout, or when the client cancels the request (the SDK's `extra.signal`, forwarded to every handler by `withCallerEnvironmentPing`), the command's process group gets SIGTERM, then SIGKILL after 2 s (Windows: `taskkill /T /F`); captured output is still returned. The call completes only once the group is gone or the SIGKILL is out, so a descendant in the group that ignores SIGTERM is still killed; a job moved to its own group (`set -m`) is not reached.
+- Commands still running are swept (SIGKILL to the group) when the server exits or receives SIGTERM/SIGINT/SIGHUP; the listener runs first and re-raises the signal with its default disposition only when it is the sole listener. A process that outlives its command (a detached service) is not tracked or swept.
+- Cursor motion in the output never creates cells — a move past the end of the line lands at the end — so no escape parameter can make the renderer allocate.
+- An explicit `cwd` is path evidence: it rebinds project detection exactly like a file tool's path.
+- The allowed-directory sandbox gates only `cwd`. The command runs with the server's privileges and can reach anything the server process can.
+
+Enabled by default like every tool; `bash: disabled` under `### Tools` turns it off.
+
 ---
 
 ## 6. Project Root Resolution
@@ -413,13 +434,14 @@ Project root resolution answers:
 
 > Where should project-scoped state such as `.mcp/symbols.db` live?
 
-Resolution ladder:
+Resolution ladder (`ProjectContext`, strongest first — see `docs/ARCHITECTURE.md` §5.8):
 
-1. Git repo from the file path or cwd
-2. MCP roots / allowed directories
-3. Project markers such as `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, etc.
-4. Explicit project registry
-5. Global fallback at `~/.zenith-mcp/`
+1. Explicit binding via `initProject` (in-memory, sticky for the session)
+2. Explicit project registry (`### Projects` in `~/.zenith-mcp/config`), matched against the tool-call path, the allowed directories, or the caller's process-tree cwd
+3. Detected boundary from the same evidence — a git root first, else project markers such as `package.json`, `Cargo.toml`, `pyproject.toml`, `go.mod`, etc. A detected root selects scope only; it never hosts a project-local `.mcp/symbols.db`
+4. Global fallback at `~/.zenith-mcp/`
+
+MCP Roots are not consulted. Allowed directories are detection hints (and, with `Sandbox: enabled`, the access boundary); `refresh()` has no production caller.
 
 Never let project-root fallback expand filesystem permissions. Only `allowedDirectories` control access.
 

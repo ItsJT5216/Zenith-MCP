@@ -129,10 +129,12 @@ export function getProcessTreeCwds(): CwdCandidate[] {
     }
     // win32: ancestor cwds require native PEB reads — own cwd only (documented)
 
-    const ownCwd = process.cwd();
-    if (!candidates.some(c => c.cwd === ownCwd)) {
-        candidates.push({ cwd: ownCwd, source: 'self:cwd' });
-    }
+    try {
+        const ownCwd = process.cwd();
+        if (!candidates.some(c => c.cwd === ownCwd)) {
+            candidates.push({ cwd: ownCwd, source: 'self:cwd' });
+        }
+    } catch { /* deleted own cwd must not discard usable ancestor evidence */ }
     return candidates;
 }
 
@@ -167,9 +169,11 @@ let _cachedAt = 0;
 
 /**
  * TTL-cached resolved candidates. The walk (and on macOS, its subprocesses)
- * runs at most once per TTL window no matter how many tool calls ping it.
+ * remains TTL-bounded on macOS, where it spawns lsof/ps. Linux /proc and
+ * own-cwd-only platforms are cheap enough to refresh at every invocation.
+ * An explicitly supplied TTL is still honored for callers that request it.
  */
-export function getCallerCwds(ttlMs: number = DEFAULT_TTL_MS): CwdCandidate[] {
+export function getCallerCwds(ttlMs: number = os.platform() === 'darwin' ? DEFAULT_TTL_MS : 0): CwdCandidate[] {
     if (_cached && Date.now() - _cachedAt < ttlMs) return _cached;
     _cached = getProcessTreeCwdsResolved();
     // Stamp AFTER the walk: a slow walk (macOS lsof chains) stamped before

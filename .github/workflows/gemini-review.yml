@@ -19,6 +19,7 @@ jobs:
         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     # Re-reviewing on every push is the point, but a burst of pushes should not mean a burst of
     # reviews. Each one is a full billed call.
@@ -63,4 +64,3 @@ jobs:
           include_comment_history: 'true'
           timeout: '600'
           language: 'English (US)'
-          include_comment_history: 'true'

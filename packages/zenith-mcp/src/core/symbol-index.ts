@@ -32,6 +32,7 @@ import {
 import { extractParsedFile } from './indexing/extract.js';
 import { persistParsedFile } from './indexing/persist.js';
 import { resolveAllEdgeTargets } from './indexing/resolve.js';
+import { getCallPersistenceRoot } from './project-context.js';
 
 // ---------------------------------------------------------------------------
 // Repo root detection
@@ -46,6 +47,11 @@ import { resolveAllEdgeTargets } from './indexing/resolve.js';
  * 3. Falls back to the .git directory's parent if git CLI is unavailable
  */
 export function findRepoRoot(filePath: string): string | null {
+    // Reuse a containing explicit/registered operation root inside a tool call,
+    // including marker-only projects. Do not mistake the neutral DB workspace
+    // for a source root; other cases keep the existing git indexing contract.
+    const callRoot = getCallPersistenceRoot(filePath);
+    if (callRoot !== undefined) return callRoot;
     try {
         const stat = statSync(filePath);
         let dir = stat.isDirectory() ? filePath : path.dirname(filePath);

@@ -1,3 +1,16 @@
+# CI — the one check that has to be green before anything merges into main.
+#
+# What it does, in order:
+#   1. installs the exact dependency set from pnpm-lock.yaml
+#   2. builds both packages with `tsc --build` (strict type-check included — a
+#      type error fails the build, so there is no separate "typecheck" step)
+#   3. runs ESLint, once the repo has an eslint.config.js (see README-CI.md)
+#   4. runs the zenith-mcp vitest suite with coverage
+#   5. runs the standalone test-harness unit suites that vitest does not collect
+#   6. keeps the coverage report as a downloadable artifact for two weeks
+#
+# zenith-toon has its own path-filtered workflow (zenith-toon-constraints.yml),
+# so it is not repeated here.
 name: CI
 
 on:
@@ -7,6 +20,11 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# The job token is read-only. Nothing in this workflow writes to the repo.
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the run that is still going for the old one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,38 +33,70 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    # A hung test must not hold the runner for the default six hours.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Setup pnpm
-        # Version auto-detected from the packageManager field in root package.json
+        # Version comes from the packageManager field in the root package.json.
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          # Pinned to engines.node in packages/zenith-mcp/package.json
-          node-version: "26.3.0"
-          cache: "pnpm"
+          # engines.node in packages/zenith-mcp/package.json is ^26.3.0.
+          node-version: "26"
+          cache: pnpm
 
       - name: Install ripgrep
+        # The search tools shell out to rg; their tests need it on PATH.
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
       - name: Install dependencies
+        # --frozen-lockfile: fail instead of silently resolving different versions
+        # than the ones committed in pnpm-lock.yaml.
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        # Builds zenith-toon first (workspace dep), then zenith-mcp.
-        # tsc --build also performs full type-checking — no separate typecheck step needed.
+        # Builds zenith-toon first (workspace dependency), then zenith-mcp.
         run: pnpm build
 
-      - name: Test (with coverage)
-        # Tests import from dist/, so build must precede this step.
+      - name: Lint (ESLint)
+        # Runs as soon as an eslint.config.js exists at the repo root; skipped
+        # until then. README-CI.md explains how to add it.
+        if: hashFiles('eslint.config.js') != ''
+        run: pnpm exec eslint .
+
+      - name: Test zenith-mcp (vitest, with coverage)
+        # The tests import from dist/, so Build must come first.
         run: pnpm --filter zenith-mcp run test:coverage
+
+      - name: Test the cwd-read harness (Python unit tests)
+        # Unit tests for the Python test harness under tests/cwd-read; not a
+        # vitest file, so vitest never sees it. Skipped while the directory
+        # does not exist on the branch under test.
+        if: hashFiles('packages/zenith-mcp/tests/cwd-read/test_*.py') != ''
+        run: python3 -m unittest discover -s packages/zenith-mcp/tests/cwd-read -p 'test_*.py'
+
+      - name: Test the cwd-write harness (Python + node:test)
+        # Same idea for tests/cwd-write: its Python launcher has unittest
+        # coverage and its JS suites have a node:test file that drives them
+        # against an in-memory fake server. Neither needs a built server.
+        if: hashFiles('packages/zenith-mcp/tests/cwd-write/test_*.py') != ''
+        run: |
+          python3 -m unittest discover -s packages/zenith-mcp/tests/cwd-write -p 'test_*.py'
+          node --test packages/zenith-mcp/tests/cwd-write/fixes-test.mjs
+
+      - name: Python syntax check (all harness scripts)
+        # The runners that need a live server (run.py, run_suite.py, …) are
+        # not executed here, but they must at least compile.
+        if: hashFiles('packages/zenith-mcp/tests/**/*.py') != ''
+        run: python3 -m compileall -q packages/zenith-mcp/tests
 
       - name: Upload coverage report
         if: always()

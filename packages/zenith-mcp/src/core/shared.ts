@@ -7,6 +7,7 @@ import os from "os";
 import { minimatch } from "minimatch";
 import { loadConfig } from '../config/index.js';
 import type { ZenithConfig } from '../config/index.js';
+import { DEFAULT_CONFIG } from '../config/schema.js';
 
 let _config: ZenithConfig | null = null;
 
@@ -34,6 +35,22 @@ export function getSearchCharBudget(): number {
 
 export function getRefactorVersionTtlMs(): number {
     return getConfig().advanced.refactor_version_ttl_hours * 60 * 60 * 1000;
+}
+
+// Node timers take a signed 32-bit millisecond delay; a longer one fires after 1 ms
+// with a TimeoutOverflowWarning, so this is the longest timeout that can be honoured.
+const MAX_TIMER_SECONDS = 2_147_483;
+
+export function getBashTimeoutSeconds(): number {
+    const val = getConfig().advanced.bash_timeout_seconds;
+    if (Number.isInteger(val) && val >= 1) return Math.min(val, MAX_TIMER_SECONDS);
+    return DEFAULT_CONFIG.advanced.bash_timeout_seconds;
+}
+
+export function getBashMaxTimeoutSeconds(): number {
+    const val = getConfig().advanced.bash_max_timeout_seconds;
+    if (Number.isInteger(val) && val >= 1) return Math.min(val, MAX_TIMER_SECONDS);
+    return DEFAULT_CONFIG.advanced.bash_max_timeout_seconds;
 }
 
 let _defaultExcludesCache: string[] | null = null;

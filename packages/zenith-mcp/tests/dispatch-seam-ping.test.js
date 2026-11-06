@@ -104,4 +104,20 @@ describe('withCallerEnvironmentPing', () => {
         await inner.registered.get('demo').handler(sent);
         expect(receivedArgs).toBe(sent); // identity — untouched
     });
+
+    it('the per-call extra passes through unchanged', async () => {
+        const { withCallerEnvironmentPing } = await importAll();
+        const inner = mkCapturingToolServer();
+        const wrapped = withCallerEnvironmentPing(inner, mkCtx());
+
+        let received = null;
+        wrapped.registerTool('demo', {}, async (_args, extra) => {
+            received = extra;
+            return { content: [] };
+        });
+
+        const extra = { signal: new AbortController().signal };
+        await inner.registered.get('demo').handler({}, extra);
+        expect(received).toBe(extra); // identity — the SDK's extra reaches the handler
+    });
 });

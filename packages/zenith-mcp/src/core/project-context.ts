@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDb } from './symbol-index.js';
 import { ProjectRegistry } from './project-registry.js';
 import type { ProjectManifest } from './project-registry.js';
@@ -51,8 +52,18 @@ function getGlobalDb(): DbConnection {
 //   explicit  — initProject() binding; sticky for the session
 //   registry  — config-file project match (~/.zenith-mcp/config, ### Projects)
 //   detected  — git/marker boundary found from tool-call path evidence,
-//               granted allowed dirs, or (upgrade-from-global only) the
-//               caller's process-tree cwd via pingCallerEnvironment()
+//               granted allowed dirs, or the caller's process-tree cwd via
+//               pingCallerEnvironment()
+//
+// Tier is strength; ORIGIN is provenance, tracked separately in
+// _boundOrigin. pingCallerEnvironment() re-evaluates every call unless the
+// current binding is explicit or selected by configured/granted roots:
+// environment is ambient evidence, so a binding LEARNED from it (origin
+// 'environment', any tier) must never disable the discovery that produced
+// it, and a positive path/detection binding follows the environment the
+// moment the caller demonstrably moved. A config/registry binding is the
+// user's fixed answer while valid; detected grants have the same precedence.
+//
 //   global    — ~/.zenith-mcp/global-stash.db. A fallback, NEVER a refusal.
 //
 // Materialization policy (anti-litter): detection is SIGNAL, promotion is
@@ -71,6 +82,13 @@ function getGlobalDb(): DbConnection {
 // ---------------------------------------------------------------------------
 
 type BindingTier = 'explicit' | 'registry' | 'detected' | 'global';
+
+/** Where the current binding came from. Distinct from tier: tier is
+ *  precedence strength, origin is provenance. The environment ping
+ *  distinguishes them — a registry-TIER binding with environment ORIGIN
+ *  (caller cwd matched a registered project) stays ambient and re-derives,
+ *  while a config/registry-origin binding is a deliberate, fixed answer. */
+type BindingOrigin = 'explicit' | 'config' | 'detection' | 'environment' | null;
 
 export class ProjectContext {
     private _ctx: FsContext;
@@ -96,6 +114,8 @@ export class ProjectContext {
     private _notifiedRoots: Set<string> = new Set();
     private _notifyFn: ((message: string) => void) | null = null;
     private _lastConfigMtimeMs: number = 0;
+    /** Provenance of the current binding — see BindingOrigin. */
+    private _boundOrigin: BindingOrigin = null;
 
     constructor(ctx: FsContext) {
         this._ctx = ctx;
@@ -110,6 +130,21 @@ export class ProjectContext {
     /** Current binding tier — diagnostic surface for tests and logging. */
     get bindingTier(): BindingTier {
         return this._tier;
+    }
+
+    /** Current binding origin — diagnostic surface for tests and logging. */
+    get bindingOrigin(): BindingOrigin {
+        return this._boundOrigin;
+    }
+
+    /** Isolate this invocation's binding without creating another observation session.
+     *  Registry/observation sets are shared; mutable routing fields are copied.
+     *  AsyncLocalStorage ends with the call's async work, not a client connection. */
+    runForCall<T>(handler: () => T): T {
+        const project = Object.assign(Object.create(ProjectContext.prototype) as ProjectContext, this);
+        let cwd: string | undefined;
+        try { cwd = this.getRoot() ?? this._ctx.getAllowedDirectories()[0]; } catch { /* best effort */ }
+        return _callContext.run({ ctx: this._ctx, project, cwd }, handler);
     }
 
     // --- Public API ---
@@ -132,17 +167,9 @@ export class ProjectContext {
         return this._boundRoot;
     }
 
-    /**
-     * Get a working root that is NEVER null — the never-refuse contract.
-     *
-     * Tools that need a directory identity (symbol DBs, relative paths)
-     * call this instead of null-checking getRoot() and throwing. Order:
-     * resolved project root → most specific allowed dir containing the hint →
-     * the hint's own directory (if not junk) → first non-junk allowed dir →
-     * first non-junk caller cwd → the neutral global workspace
-     * (~/.zenith-mcp/workspace). "No project detected" must degrade, never
-     * refuse: this MCP's features are never null and void.
-     */
+    /** Persistence root: only explicit/registered projects may host a .mcp DB.
+     *  Unregistered detection uses the neutral workspace. This is NOT the cwd
+     *  selector for relative filesystem operations or bash execution. */
     getWorkingRoot(hint?: string): string {
         const root = this.getRoot(hint);
         // Materialization gate (same policy as getStashDb): only registered
@@ -199,7 +226,8 @@ export class ProjectContext {
     }
 
     /**
-     * Force re-resolution. Called when MCP roots change.
+     * Force re-resolution. MCP Roots are not wired, so nothing in src/ calls
+     * this today; it is exercised by tests and kept for hosts that need it.
      * Explicit bindings (set via initProject) are preserved — they are sticky.
      */
     refresh(): void {
@@ -209,6 +237,7 @@ export class ProjectContext {
             this._isGlobal = false;
             this._resolved = false;
             this._tier = 'global';
+            this._boundOrigin = null;
         }
         // Don't re-sync from SQLite on refresh — config registry is authoritative
         if (!this._explicit) {
@@ -239,6 +268,7 @@ export class ProjectContext {
         this._resolved = true;
         this._explicit = true;
         this._tier = 'explicit';
+        this._boundOrigin = 'explicit';
         return abs;
     }
 
@@ -258,6 +288,7 @@ export class ProjectContext {
             this._isGlobal = false;
             this._resolved = true;
             this._tier = 'registry';
+            this._boundOrigin = 'config';
             console.error(
                 `[ProjectContext] Session root matched project: ${manifest.project_id}`
             );
@@ -324,6 +355,7 @@ export class ProjectContext {
                 this._boundRoot = null;
                 this._isGlobal = true;
                 this._tier = 'global';
+                this._boundOrigin = null;
             }
         }
 
@@ -368,6 +400,9 @@ export class ProjectContext {
                             );
                         }
                         this._tier = 'registry';
+                        // The claim came from path evidence, not from the
+                        // environment ping — the binding is now path-held.
+                        this._boundOrigin = 'detection';
                     }
                 }
                 return;
@@ -399,6 +434,7 @@ export class ProjectContext {
                 );
             }
             this._tier = 'registry';
+            this._boundOrigin = 'detection';
         } else if (!this._explicit) {
             // No registry match — tool-call path evidence through the boundary
             // finders (git → markers, clamped, junk-filtered, cached).
@@ -416,6 +452,7 @@ export class ProjectContext {
                     this._isGlobal = true;
                     this._resolved = true;
                     this._tier = 'global';
+                    this._boundOrigin = null;
                 }
                 // Notify once per unique unrecognized root (gated on allowed dirs)
                 this._notifyGlobalFallback(resolvedPath);
@@ -493,7 +530,16 @@ export class ProjectContext {
         }
         this._isGlobal = false;
         this._resolved = true;
-        this._tier = promoted ? 'registry' : 'detected';
+        const registered = this._registry.findProject(root);
+        this._tier = promoted || registered?.project_root === root ? 'registry' : 'detected';
+        // An auto-promotion earned through CALLER-CWD evidence is not a
+        // user-fixed selection: keep the origin environmental so the ping
+        // keeps re-deriving when the caller's cwd moves. The registry match
+        // still wins later pings (see pingCallerEnvironment), so a promoted
+        // root re-binds after a detour through another project — it is
+        // never accidentally downgraded.
+        this._boundOrigin = source.startsWith('caller cwd') ? 'environment'
+            : source === 'allowed dir' || source === 'session root' ? 'config' : 'detection';
     }
 
     /** Fire the host notification channel, tolerating unready transports. */
@@ -503,13 +549,14 @@ export class ProjectContext {
     }
 
     /** Boundary detection with the session's allowed dirs and cache generation. */
-    private _detectBoundary(absPath: string): { root: string; method: 'git' | 'marker' } | null {
+    private _detectBoundary(absPath: string, noCache = false): { root: string; method: 'git' | 'marker' } | null {
         let allowedDirs: string[] = [];
         try { allowedDirs = this._ctx.getAllowedDirectories(); } catch { /* mock ctx */ }
         return findProjectBoundary(absPath, {
             allowedDirectories: allowedDirs,
             generation: this._generation,
             cacheSalt: this._instanceId,
+            noCache,
         });
     }
 
@@ -526,11 +573,13 @@ export class ProjectContext {
         // Check if any allowed directory matches a registered project
         const allowedDirs = this._ctx.getAllowedDirectories();
         for (const dir of allowedDirs) {
+            try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
             const manifest = this._registry.findProject(dir);
             if (manifest) {
                 this._boundRoot = normalizePath(path.resolve(manifest.project_root));
                 this._isGlobal = false;
                 this._tier = 'registry';
+                this._boundOrigin = 'config';
                 return;
             }
         }
@@ -538,7 +587,8 @@ export class ProjectContext {
         // No registry match — boundary-detect the granted directories
         // themselves (an allowed dir that IS a repo is a strong signal).
         for (const dir of allowedDirs) {
-            const boundary = this._detectBoundary(dir);
+            try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
+            const boundary = this._detectBoundary(dir, true);
             if (boundary) {
                 this._bindDetected(boundary.root, boundary.method, 'allowed dir');
                 return;
@@ -550,40 +600,59 @@ export class ProjectContext {
         this._boundRoot = null;
         this._isGlobal = true;
         this._tier = 'global';
+        this._boundOrigin = null;
     }
 
-    /**
-     * Environment ping — called by the tool dispatch seam on every tool call,
-     * NEVER by the model and never via tool schemas. Walks the caller's
-     * process tree (kernel-truth cwds, TTL-cached) and upgrades the binding
-     * ONLY when currently global: environment is the weakest signal and must
-     * never displace explicit bindings, registry matches, or path evidence.
-     */
+    /** Re-read ambient evidence on every dispatch, including after detection.
+     *  Deliberate explicit/granted selections still win. Ambient registry matches
+     *  remain ambient, and incidental file access does not pin later calls. */
     pingCallerEnvironment(): void {
-        if (!this._resolved) this._resolveNoFile();
-        if (this._tier !== 'global') return;
+        if (this._explicit) return;
+        this._tryLazyReload();
+        // Recheck grants so path access or changed hints cannot erase their
+        // precedence; a missing grant is not accepted as a usable directory.
+        if (!this._resolved || this._ctx.getAllowedDirectories().length > 0) this._resolveNoFile();
+        if (this._boundOrigin === 'config' && this._boundRoot) {
+            try { if (fs.statSync(this._boundRoot).isDirectory()) return; } catch { /* retry evidence */ }
+        }
 
         for (const candidate of getCallerCwds()) {
             if (isJunkRoot(candidate.cwd)) continue;
-
-            // Registered project cd'd into? Strongest interpretation wins.
             const manifest = this._registry.findProject(candidate.cwd);
             if (manifest) {
-                this._boundRoot = normalizePath(path.resolve(manifest.project_root));
+                const newRoot = normalizePath(path.resolve(manifest.project_root));
+                try { if (!fs.statSync(newRoot).isDirectory()) continue; } catch { continue; }
+                if (newRoot !== this._boundRoot || this._tier !== 'registry') {
+                    console.error(`[ProjectContext] Caller cwd matched project: ${manifest.project_id} (${candidate.source})`);
+                }
+                this._boundRoot = newRoot;
                 this._isGlobal = false;
                 this._resolved = true;
                 this._tier = 'registry';
-                console.error(
-                    `[ProjectContext] Caller cwd matched project: ${manifest.project_id} (${candidate.source})`
-                );
+                this._boundOrigin = 'environment';
                 return;
             }
 
-            const boundary = this._detectBoundary(candidate.cwd);
+            // Ambient evidence must not reuse a permanent positive/negative
+            // boundary cache after markers or directories change. The nearest
+            // positive candidate wins EVEN when it agrees with the current root;
+            // skipping that candidate would let a weaker ancestor replace it.
+            const boundary = this._detectBoundary(candidate.cwd, true);
             if (boundary) {
                 this._bindDetected(boundary.root, boundary.method, `caller cwd, ${candidate.source}`);
                 return;
             }
+        }
+
+        // Preserve a valid prior affirmative binding when evidence is unavailable,
+        // but never keep a deleted/non-directory root as a usable cwd.
+        if (this._boundRoot) {
+            try { if (fs.statSync(this._boundRoot).isDirectory()) return; } catch { /* invalidate */ }
+            this._boundRoot = null;
+            this._isGlobal = true;
+            this._resolved = true;
+            this._tier = 'global';
+            this._boundOrigin = null;
         }
     }
 
@@ -691,9 +760,33 @@ function ensureStashTables(conn: DbConnection): void {
 // Singleton + integration hooks
 // ---------------------------------------------------------------------------
 
+// Invocation-local routing, not a session/caller map. The process context still
+// owns registry/observation lifetime; each async call owns its root snapshot.
+const _callContext = new AsyncLocalStorage<{ ctx: FsContext; project: ProjectContext; cwd: string | undefined }>();
+
+/** Registered/explicit operation roots may be marker-only, not necessarily git.
+ *  Undefined preserves legacy standalone indexing for other cases; a neutral
+ *  storage directory must never masquerade as the source file's project root. */
+export function getCallPersistenceRoot(filePath: string): string | undefined {
+    const project = _callContext.getStore()?.project;
+    if (!project) return undefined;
+    const root = project.getRoot(filePath);
+    if (!root || (project.bindingTier !== 'explicit' && project.bindingTier !== 'registry')) return undefined;
+    const relative = path.relative(root, filePath);
+    return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
+        ? root : undefined;
+}
+
+export function getCallWorkingDirectory(ctx: FsContext): string | undefined {
+    const call = _callContext.getStore();
+    return call?.ctx === ctx ? call.cwd : undefined;
+}
+
 let _instances = new WeakMap<FsContext, ProjectContext>();
 
 export function getProjectContext(ctx: FsContext): ProjectContext {
+    const call = _callContext.getStore();
+    if (call?.ctx === ctx) return call.project;
     let instance = _instances.get(ctx);
     if (!instance) {
         instance = new ProjectContext(ctx);

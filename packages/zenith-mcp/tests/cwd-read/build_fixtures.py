@@ -23,7 +23,7 @@ reveal the answer in the path itself:
   assets/snd_<tag>.wav  valid WAV (distinct bytes per project)
   nested/deep/deep_<tag>.txt  unique nested content
 """
-import base64, os, struct, sys, zlib, hashlib, shutil
+import json, os, struct, sys, zlib, hashlib
 
 def write(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -125,7 +125,6 @@ def build_project(root, name, meta):
           f"deep content {tag} {token}\n")
 
 def json_pkg(name):
-    import json
     return json.dumps({"name": name, "version": "0.0.0", "private": True}, indent=2) + "\n"
 
 def main():
@@ -170,5 +169,4 @@ def main():
     print("projects:", ", ".join(list(PROJECTS) + ["junk-plain"]))
 
 if __name__ == "__main__":
-    import json
     main()

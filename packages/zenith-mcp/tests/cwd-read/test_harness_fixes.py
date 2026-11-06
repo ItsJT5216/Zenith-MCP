@@ -12,8 +12,8 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 import warnings
-from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # harness.py resolves the Node binary at import time (C20-a3). These tests never

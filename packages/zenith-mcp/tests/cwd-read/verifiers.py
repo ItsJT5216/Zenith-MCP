@@ -13,7 +13,7 @@ Usage:
 Exit code is 0 when the harness itself ran cleanly (regardless of product
 pass/fail — those are reported in the JSON + tables), non-zero on harness error.
 """
-import argparse, json, os, re, sys, time, hashlib, base64
+import json, os, re, sys, hashlib, base64
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H

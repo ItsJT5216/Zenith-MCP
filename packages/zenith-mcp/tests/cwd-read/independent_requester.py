@@ -12,7 +12,7 @@ point of the negative control.
 The bearer token is passed only to the server and is never written to --out or to
 any log. No cwd or identity header is sent; only the SEP-2243 standard headers.
 """
-import argparse, json, sys, urllib.request, urllib.error
+import argparse, json, urllib.request, urllib.error
 
 
 def main():

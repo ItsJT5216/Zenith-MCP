@@ -62,7 +62,7 @@ export async function runRefactorSuite(server, F, rec, cov, ctx) {
     const bFile = `src/b.js`;
     const aAbs = path.join(F[proj], 'src', 'a.js');
     const bAbs = path.join(F[proj], 'src', 'b.js');
-    const aBase = readF(aAbs), bBase = readF(bAbs);
+    const aBase = readF(aAbs);
     // 1. query (impact)
     cov.planned(T, transport, 1);
     await invoke(stepCtx, { mode: 'query', target: 'targetFn', fileScope: aFile, direction: 'forward', depth: 1 }, {
@@ -156,7 +156,6 @@ export async function runRefactorSuite(server, F, rec, cov, ctx) {
     const proj = ctx.registeredProject; // e.g. 'A'
     const A = { proj, kind: 'stable', index: 600, phase: `${proj}#rb-consent`, dir: F[proj], realDir: F.real[proj], expectedActiveRoot: expectedBoundary(F[proj]), launcherCwd: F[proj] };
     process.chdir(F[proj]);
-    const projDb = path.join(F[proj], '.mcp');
     const okRun = await pipeline(A, proj, ['persistence-consent']);
     // reapply: apply a cached pattern to new targets (real mode)
     if (okRun) {

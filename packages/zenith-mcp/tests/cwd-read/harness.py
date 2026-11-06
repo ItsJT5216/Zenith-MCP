@@ -17,7 +17,7 @@ Design notes (from source + handoff review):
   harness IS the server's parent and controls its own cwd to present that
   evidence. No test supplies a cwd argument or any project/identity header.
 """
-import json, os, socket, subprocess, sys, threading, time, select, shutil
+import json, os, socket, subprocess, threading, time, select, shutil
 import urllib.request, urllib.error, http.client
 
 HERE = os.path.dirname(os.path.abspath(__file__))

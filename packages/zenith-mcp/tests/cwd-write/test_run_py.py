@@ -47,7 +47,8 @@ class RunPyLauncher(unittest.TestCase):
             for line in f:
                 if line.startswith('SHIM='):
                     return json.loads(line[len('SHIM='):])
-        self.fail('shim was not invoked: ' + open(self.log).read())
+        with open(self.log) as f:
+            self.fail('shim was not invoked: ' + f.read())
 
     def test_zenith_node_env_selects_the_binary_and_base_defaults_under_out_dir(self):
         proc = self.launch({'ZENITH_NODE': self.shim})

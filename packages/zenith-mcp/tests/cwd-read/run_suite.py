@@ -15,7 +15,7 @@ a different --repo-root. Settle behaviour: the transition matrix uses a 6s
 settle for the post-TTL leg and a 0s settle for the immediate leg, recorded
 separately via ttl_boundary; no cache is cleared and no refresh call is issued.
 """
-import argparse, json, os, sys, time, secrets, shutil
+import argparse, json, os, sys, time, secrets
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H

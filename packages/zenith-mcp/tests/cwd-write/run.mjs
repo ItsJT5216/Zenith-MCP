@@ -81,8 +81,6 @@ const globalRecord = {
   runs: [],
 };
 
-const OWNED = ['bash', 'write_file', 'edit_file', 'file_manager', 'stashRestore', 'refactor_batch'];
-
 async function runOneServer(transport, rep) {
   const label = `${transport}-rep${rep}`;
   const home = path.join(HOME_BASE, `${label}`);

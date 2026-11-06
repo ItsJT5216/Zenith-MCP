@@ -11,7 +11,7 @@ The launcher's cwd IS the model-free evidence the server's ping reads
 launcher (parent) cwd to effect parent-cwd transitions. No invocation supplies
 a cwd argument or any project/identity header.
 """
-import argparse, json, os, sys, time, threading
+import os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H

@@ -516,7 +516,7 @@ class NodeBinaryResolution(unittest.TestCase):
             fake = os.path.join(tmp, "node")
             with open(fake, "w") as f:
                 f.write("#!/bin/sh\nexit 0\n")
-            os.chmod(fake, 0o755)
+            os.chmod(fake, 0o700)
             with mock.patch.dict(os.environ, {"PATH": tmp}, clear=False):
                 os.environ.pop("ZENITH_NODE", None)
                 self.assertEqual(H.resolve_node(), fake)

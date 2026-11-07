@@ -460,7 +460,7 @@ export async function ripgrepSearch(rootPath: string, options: {
                             results.push({ file: filePath, line: d.line_number, content: d.lines?.text?.replace(/\n$/, '') || '', isContext: true });
                         }
                     }
-                } catch (_err) { }
+                } catch { }
             }
         });
         proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });

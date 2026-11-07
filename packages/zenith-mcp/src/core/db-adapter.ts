@@ -667,7 +667,7 @@ export function getVersionHistory(
     filePath?: string
 ): { id: number; symbol_name: string; file_path: string | null; created_at: number; text_hash: string | null }[] {
     let sql = 'SELECT id, symbol_name, file_path, created_at, text_hash FROM versions WHERE symbol_name = ? AND session_id = ?';
-    const params: any[] = [symbolName, sessionId];
+    const params: string[] = [symbolName, sessionId];
     if (filePath) {
         sql += ' AND file_path = ?';
         params.push(filePath);

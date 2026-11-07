@@ -537,7 +537,7 @@ export function register(server: ToolServer, ctx: ToolContext) {
                 flag: flagByOccurrence.get(o) || null,
             }));
             const priorOccurrences: LoadedOccurrence[] = (args.loadMore && Array.isArray(cached?.occurrences))
-                ? cached!.occurrences!
+                ? cached.occurrences
                 : [];
             _loadCache.set(cacheKey, {
                 results: cached?.results || [],

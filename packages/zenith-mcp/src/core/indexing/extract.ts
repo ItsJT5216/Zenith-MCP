@@ -92,7 +92,7 @@ export async function extractParsedFile(
         for (const s of rawSymbols) {
             let bHash: string | null = null;
             let parentKey: string | null = null;
-            let visibility: string | null = null;
+            const visibility: string | null = null;
 
             if (s.kind === 'def') {
                 const slice = bodySlice(source, s.line, s.endLine);

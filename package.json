@@ -22,14 +22,19 @@
     "start": "pnpm --filter zenith-mcp run start",
     "start:http": "pnpm --filter zenith-mcp run start:http",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
+    "lint": "eslint .",
     "release:publish": "pnpm run release:pack && pnpm run test && pnpm run test:toon && pnpm run release:verify && node scripts/publish-npm-package.mjs --tag latest",
     "release:pack": "pnpm run clean && pnpm run build && node scripts/stage-npm-package.mjs",
     "release:verify": "node --test scripts/npm-package.test.mjs && node scripts/verify-npm-package.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@typescript/native": "npm:typescript@7.0.2",
     "depcheck": "^1.4.7",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
     "turbo": "^2.11.10",
-    "typescript": "^7.0.2"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.72.1"
   }
 }

@@ -1,4 +1,4 @@
-// ESLint flat config — OPTIONAL, see README-CI.md "Adding ESLint".
+// ESLint flat config — run with `pnpm lint` (also enforced by CI).
 //
 // Deliberately small and high-signal:
 //   * ESLint's own recommended rules (real bugs: undefined names, duplicate
@@ -51,9 +51,14 @@ export default tseslint.config(
 
   // Test code: unused bindings are a warning for now (tsc does not check the JS tests).
   {
-    files: ['packages/*/tests/**', 'scripts/**'],
+    files: ['packages/*/tests/**/*.{js,mjs,cjs}', 'scripts/**/*.{js,mjs,cjs}'],
     rules: {
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    files: ['packages/*/tests/**/*.{ts,mts,cts}', 'scripts/**/*.{ts,mts,cts}'],
+    rules: {
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },

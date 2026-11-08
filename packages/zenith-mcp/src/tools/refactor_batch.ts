@@ -459,9 +459,12 @@ export function register(server: ToolServer, ctx: ToolContext) {
             const modalBySymbol = new Map<string, SymbolStructure>();
             const bySymbol = new Map<string, RawOccurrence[]>();
             for (const occ of occurrences) {
-                if (!bySymbol.has(occ.symbol))
-                    bySymbol.set(occ.symbol, []);
-                bySymbol.get(occ.symbol)!.push(occ);
+                let group = bySymbol.get(occ.symbol);
+                if (group === undefined) {
+                    group = [];
+                    bySymbol.set(occ.symbol, group);
+                }
+                group.push(occ);
             }
             for (const [symName, group] of bySymbol) {
                 if (group.length < 2)
@@ -585,9 +588,12 @@ export function register(server: ToolServer, ctx: ToolContext) {
             // Build symbolName -> [occurrence] map, preserving the indices load printed.
             const loadedSymbols = new Map<string, LoadedOccurrence[]>();
             for (const occ of cached.occurrences) {
-                if (!loadedSymbols.has(occ.symbol))
-                    loadedSymbols.set(occ.symbol, []);
-                loadedSymbols.get(occ.symbol)!.push(occ);
+                let group = loadedSymbols.get(occ.symbol);
+                if (group === undefined) {
+                    group = [];
+                    loadedSymbols.set(occ.symbol, group);
+                }
+                group.push(occ);
             }
             // Flag set: every cached occurrence with a `flag` is an outlier.
             const flaggedIndices = new Set<number>();
@@ -657,10 +663,11 @@ export function register(server: ToolServer, ctx: ToolContext) {
                 const occList = loadedSymbols.get(g.symbol)!;
                 const selected = occList.filter((o: LoadedOccurrence) => g.indices.includes(o.index));
                 for (const occ of selected) {
-                    if (!fileBundles.has(occ.absPath)) {
-                        fileBundles.set(occ.absPath, { edits: [], disambiguations: new Map(), occMeta: [], relFile: occ.relFile });
+                    let bundle = fileBundles.get(occ.absPath);
+                    if (bundle === undefined) {
+                        bundle = { edits: [], disambiguations: new Map(), occMeta: [], relFile: occ.relFile };
+                        fileBundles.set(occ.absPath, bundle);
                     }
-                    const bundle = fileBundles.get(occ.absPath)!;
                     const editIdx = bundle.edits.length;
                     bundle.edits.push({ mode: 'symbol', symbol: g.symbol, newText: g.body });
                     // Always set a disambiguation anchor so batches with multiple symbols work.
@@ -1037,10 +1044,11 @@ export function register(server: ToolServer, ctx: ToolContext) {
             }
             const fileBundles = new Map<string, ReapplyBundle>();
             for (const t of targets) {
-                if (!fileBundles.has(t.absPath)) {
-                    fileBundles.set(t.absPath, { edits: [], disambiguations: new Map(), occMeta: [] });
+                let bundle = fileBundles.get(t.absPath);
+                if (bundle === undefined) {
+                    bundle = { edits: [], disambiguations: new Map(), occMeta: [] };
+                    fileBundles.set(t.absPath, bundle);
                 }
-                const bundle = fileBundles.get(t.absPath)!;
                 const editIdx = bundle.edits.length;
                 bundle.edits.push({ mode: 'symbol', symbol: t.symbol, newText: cachedPayload.body });
                 bundle.disambiguations.set(editIdx, { nearLine: t.line });

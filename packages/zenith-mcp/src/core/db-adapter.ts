@@ -1027,7 +1027,7 @@ export function execRaw(conn: DbConnection, sql: string): void {
  * Bypasses the statement cache to avoid pollution from ad-hoc queries.
  * Use ONLY in tests for assertions — production code should use dedicated adapter functions.
  */
-export function queryRaw(conn: DbConnection, sql: string, ...params: any[]): any[] {
+export function queryRaw(conn: DbConnection, sql: string, ...params: any[]): ReturnType<StatementSync['all']> {
     return handle(conn).prepare(sql).all(...params);
 }
 

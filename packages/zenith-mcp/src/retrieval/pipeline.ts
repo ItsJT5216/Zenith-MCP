@@ -106,8 +106,8 @@ export class RetrievalPipeline {
   private readonly logger: RetrievalLogger;
   private readonly config: RetrievalConfig;
   private readonly reg: Record<string, ToolMapping>;
-  private readonly scanner?: TelemetryScanner;
-  private readonly metrics?: RollingMetrics;
+  private readonly scanner: TelemetryScanner | undefined;
+  private readonly metrics: RollingMetrics | undefined;
 
   /** Tier-3 keyword retriever — set externally if available. */
   public keywordRetriever: ToolRetriever | null = null;
@@ -140,7 +140,7 @@ export class RetrievalPipeline {
     logger: RetrievalLogger;
     config: RetrievalConfig;
     toolRegistry: Record<string, ToolMapping>;
-    telemetryScanner?: TelemetryScanner;
+    telemetryScanner?: TelemetryScanner | undefined;
     rollingMetrics?: RollingMetrics;
   }) {
     this.retriever = o.retriever;
@@ -480,7 +480,7 @@ export class RetrievalPipeline {
 
     if (turn > 1) {
       for (const tk of afterPromo) {
-        const rank = rankMap.get(tk) ?? scored!.length;
+        const rank = rankMap.get(tk) ?? scored.length;
         if (rank >= k3) {
           state.consecutiveLowRank[tk] = (state.consecutiveLowRank[tk] ?? 0) + 1;
           if ((state.consecutiveLowRank[tk] ?? 0) >= 2) demoCand.push(tk);

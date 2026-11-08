@@ -18,8 +18,8 @@ interface TermData {
 
 export class BMXIndex {
   // Optional parameter overrides
-  alphaOverride?: number;
-  betaOverride?: number;
+  alphaOverride?: number | undefined;
+  betaOverride?: number | undefined;
   normalizeScores = false;
 
   // Internal state
@@ -56,8 +56,8 @@ export class BMXIndex {
   private _fieldWeights: Map<string, number> = new Map();
 
   constructor(opts?: {
-    alphaOverride?: number;
-    betaOverride?: number;
+    alphaOverride?: number | undefined;
+    betaOverride?: number | undefined;
     normalizeScores?: boolean;
   }) {
     if (opts?.alphaOverride !== undefined) this.alphaOverride = opts.alphaOverride;
@@ -196,7 +196,7 @@ export class BMXIndex {
     }
 
     // Precompute IDF (Lucene variant)
-    for (const [term, data] of this._terms) {
+    for (const [, data] of this._terms) {
       data.idf = Math.log(((this._totalDocs - data.docFreq + 0.5) / (data.docFreq + 0.5)) + 1.0);
     }
 
@@ -324,7 +324,7 @@ export class BMXIndex {
 
     const termCounts = new Map<string, number>();
     for (const t of tokens) termCounts.set(t, (termCounts.get(t) ?? 0) + 1);
-    const affectedTerms = new Set<string>();
+    const affectedTerms = new Map<string, TermData>();
 
     for (const [term, count] of termCounts) {
       const data = this._getOrCreateTerm(term);
@@ -332,24 +332,22 @@ export class BMXIndex {
       data.totalFreq += count;
       data.postingListTFs.set(chunkId, count);
       data.invertedIndex.add(chunkId);
-      affectedTerms.add(term);
+      affectedTerms.set(term, data);
     }
 
-    for (const term of affectedTerms) {
-      const data = this._terms.get(term)!;
+    for (const data of affectedTerms.values()) {
       data.idf = Math.log(((this._totalDocs - data.docFreq + 0.5) / (data.docFreq + 0.5)) + 1.0);
     }
 
-    for (const t of affectedTerms) this._dirtyTerms.add(t);
+    for (const t of affectedTerms.keys()) this._dirtyTerms.add(t);
     this._alpha = this._computeAlpha();
     this._beta = this._computeBeta();
     this._isBuilt = true;
   }
 
   removeFromIndex(chunkId: string): boolean {
-    if (!this._documents.has(chunkId)) return false;
-
-    const tokens = this._documents.get(chunkId)!;
+    const tokens = this._documents.get(chunkId);
+    if (tokens === undefined) return false;
     const termCounts = new Map<string, number>();
     for (const t of tokens) termCounts.set(t, (termCounts.get(t) ?? 0) + 1);
 
@@ -360,7 +358,7 @@ export class BMXIndex {
     const totalLength = [...this._docLengths.values()].reduce((a, b) => a + b, 0);
     this._avgDocLength = this._totalDocs > 0 ? totalLength / this._totalDocs : 0;
 
-    const affectedTerms = new Set<string>();
+    const affectedTerms = new Map<string, TermData>();
     for (const [term, count] of termCounts) {
       const data = this._terms.get(term);
       if (!data) continue;
@@ -373,15 +371,14 @@ export class BMXIndex {
       if (data.docFreq <= 0) {
         this._terms.delete(term);
       } else {
-        affectedTerms.add(term);
+        affectedTerms.set(term, data);
       }
     }
 
-    for (const term of affectedTerms) {
-      const data = this._terms.get(term)!;
+    for (const data of affectedTerms.values()) {
       data.idf = Math.log(((this._totalDocs - data.docFreq + 0.5) / (data.docFreq + 0.5)) + 1.0);
     }
-    for (const t of affectedTerms) this._dirtyTerms.add(t);
+    for (const t of affectedTerms.keys()) this._dirtyTerms.add(t);
     this._alpha = this._computeAlpha();
     this._beta = this._computeBeta();
 

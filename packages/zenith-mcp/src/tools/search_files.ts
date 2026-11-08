@@ -522,7 +522,7 @@ export function register(server: ToolServer, ctx: ToolContext) {
                         });
                     }
                 }
-                catch (_err) {
+                catch {
                     // BM25 pre-filter failed — fall through to full ripgrep search
                 }
             }
@@ -592,7 +592,7 @@ export function register(server: ToolServer, ctx: ToolContext) {
                     }
                 }
             }
-            catch (_err) { /* skip binary/unreadable files */ }
+            catch { /* skip binary/unreadable files */ }
         }
         async function walk(dir: string) {
             if (contentResults.length >= maxJsFallback)
@@ -601,7 +601,7 @@ export function register(server: ToolServer, ctx: ToolContext) {
             try {
                 entries = await fs.readdir(dir, { withFileTypes: true });
             }
-            catch (_err) {
+            catch {
                 return;
             }
             for (const entry of entries) {

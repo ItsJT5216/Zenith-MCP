@@ -12,7 +12,7 @@ export interface RootMonitorOptions {
 }
 
 export class RootMonitor {
-  private readonly _scanner?: TelemetryScanner;
+  private readonly _scanner: TelemetryScanner | undefined;
   private _rootUris: string[];
   private readonly _threshold: number;
   private readonly _minDebounceMs: number;

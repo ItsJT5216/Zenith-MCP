@@ -667,7 +667,7 @@ export function getVersionHistory(
     filePath?: string
 ): { id: number; symbol_name: string; file_path: string | null; created_at: number; text_hash: string | null }[] {
     let sql = 'SELECT id, symbol_name, file_path, created_at, text_hash FROM versions WHERE symbol_name = ? AND session_id = ?';
-    const params: any[] = [symbolName, sessionId];
+    const params: string[] = [symbolName, sessionId];
     if (filePath) {
         sql += ' AND file_path = ?';
         params.push(filePath);
@@ -1027,7 +1027,7 @@ export function execRaw(conn: DbConnection, sql: string): void {
  * Bypasses the statement cache to avoid pollution from ad-hoc queries.
  * Use ONLY in tests for assertions — production code should use dedicated adapter functions.
  */
-export function queryRaw(conn: DbConnection, sql: string, ...params: any[]): any[] {
+export function queryRaw(conn: DbConnection, sql: string, ...params: any[]): ReturnType<StatementSync['all']> {
     return handle(conn).prepare(sql).all(...params);
 }
 

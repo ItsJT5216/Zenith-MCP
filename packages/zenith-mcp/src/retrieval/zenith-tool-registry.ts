@@ -52,21 +52,20 @@ export class ZenithToolRegistry {
 
   /** Live read-only view for consumers that must observe late registrations. */
   asLiveRecord(): Record<string, ToolMapping> {
-    const registry = this;
     return new Proxy({} as Record<string, ToolMapping>, {
-      ownKeys() {
-        return [...registry._m.keys()];
+      ownKeys: () => {
+        return [...this._m.keys()];
       },
-      getOwnPropertyDescriptor(_target, key) {
-        return typeof key === "string" && registry._m.has(key)
+      getOwnPropertyDescriptor: (_target, key) => {
+        return typeof key === "string" && this._m.has(key)
           ? { enumerable: true, configurable: true }
           : undefined;
       },
-      get(_target, key) {
-        return typeof key === "string" ? registry._m.get(key) : undefined;
+      get: (_target, key) => {
+        return typeof key === "string" ? this._m.get(key) : undefined;
       },
-      has(_target, key) {
-        return typeof key === "string" && registry._m.has(key);
+      has: (_target, key) => {
+        return typeof key === "string" && this._m.has(key);
       },
     });
   }

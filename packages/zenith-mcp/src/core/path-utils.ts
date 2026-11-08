@@ -33,65 +33,69 @@ export function convertToWindowsPath(p: string): string {
  * @param p The path to normalize
  * @returns Normalized path
  */
-export function normalizePath(p: any): any {
+export function normalizePath(p: string): string;
+export function normalizePath<T>(p: T): T extends string ? string : T;
+export function normalizePath(p: unknown): unknown {
     // Handle non-string values
     if (p === null) return null;
     if (p === undefined) return undefined;
     if (typeof p !== 'string') return p;
 
+    let stringPath = p;
+
     // Check for null bytes before any processing
-    if (p.includes('\x00')) {
+    if (stringPath.includes('\x00')) {
         throw new Error('Path contains null bytes');
     }
 
     // Remove any surrounding quotes and whitespace
-    p = p.trim().replace(/^['"]|['"]$/g, '');
+    stringPath = stringPath.trim().replace(/^['"]|['"]$/g, '');
 
     // Empty string: return as-is (path.normalize('') would return '.')
-    if (p === '') {
+    if (stringPath === '') {
         return '';
     }
 
     // Expand tilde after quote stripping so quoted tilde paths like '"~/test"' work
-    p = expandHome(p);
+    stringPath = expandHome(stringPath);
 
     // Check if this is a Unix path that should not be converted
     // WSL paths (/mnt/) should ALWAYS be preserved as they work correctly in WSL with Node.js fs
     // Regular Unix paths should also be preserved
-    const isUnixPath = p.startsWith('/') && (
+    const isUnixPath = stringPath.startsWith('/') && (
     // Always preserve WSL paths (/mnt/c/, /mnt/d/, etc.)
-    p.match(/^\/mnt\/[a-z]\//i) ||
+    stringPath.match(/^\/mnt\/[a-z]\//i) ||
         // On non-Windows platforms, treat all absolute paths as Unix paths
         (process.platform !== 'win32') ||
         // On Windows, preserve Unix paths that aren't Unix-style Windows paths (/c/, /d/, etc.)
-        (process.platform === 'win32' && !p.match(/^\/[a-zA-Z]\//)));
+        (process.platform === 'win32' && !stringPath.match(/^\/[a-zA-Z]\//)));
     if (isUnixPath) {
         // Collapse multiple slashes first, then use path.normalize to resolve . and .. segments
-        const collapsed = p.replace(/\/+/g, '/');
+        const collapsed = stringPath.replace(/\/+/g, '/');
         // path.normalize resolves dot segments; remove trailing slash except for root '/'
         return path.normalize(collapsed).replace(/(?<!^)\/$/, '');
     }
     // Convert Unix-style Windows paths (/c/, /d/) to Windows format if on Windows
     // This function will now leave /mnt/ paths unchanged
-    p = convertToWindowsPath(p);
+    stringPath = convertToWindowsPath(stringPath);
     // Handle double backslashes, preserving leading UNC \\ 
-    if (p.startsWith('\\\\')) {
+    if (stringPath.startsWith('\\\\')) {
         // For UNC paths, first normalize any excessive leading backslashes to exactly \\\n        // Then normalize double backslashes in the rest of the path
-        let uncPath = p;
+        let uncPath = stringPath;
         // Replace multiple leading backslashes with exactly two
         uncPath = uncPath.replace(/^\\{2,}/, '\\\\');
         // Now normalize any remaining double backslashes in the rest of the path
         const restOfPath = uncPath.substring(2).replace(/\\\\/g, '\\');
-        p = '\\\\' + restOfPath;
+        stringPath = '\\\\' + restOfPath;
     }
     else {
         // For non-UNC paths, normalize all double backslashes
-        p = p.replace(/\\\\/g, '\\');
+        stringPath = stringPath.replace(/\\\\/g, '\\');
     }
     // Use Node's path normalization, which handles . and .. segments
-    let normalized = path.normalize(p);
+    let normalized = path.normalize(stringPath);
     // Fix UNC paths after normalization (path.normalize can remove a leading backslash)
-    if (p.startsWith('\\\\') && !normalized.startsWith('\\\\')) {
+    if (stringPath.startsWith('\\\\') && !normalized.startsWith('\\\\')) {
         normalized = '\\' + normalized;
     }
     // Handle Windows paths: convert slashes and ensure drive letter is capitalized

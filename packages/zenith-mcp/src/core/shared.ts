@@ -174,8 +174,12 @@ export class BM25Index {
             const tfMap = new Map<string, number>();
             for (const token of tokens) tfMap.set(token, (tfMap.get(token) || 0) + 1);
             for (const [term, count] of tfMap) {
-                if (!this._postingLists.has(term)) this._postingLists.set(term, new Map());
-                this._postingLists.get(term)!.set(doc.id, count);
+                let posting = this._postingLists.get(term);
+                if (posting === undefined) {
+                    posting = new Map();
+                    this._postingLists.set(term, posting);
+                }
+                posting.set(doc.id, count);
                 this._termTotalFreqs.set(term, (this._termTotalFreqs.get(term) || 0) + count);
             }
         }
@@ -460,7 +464,7 @@ export async function ripgrepSearch(rootPath: string, options: {
                             results.push({ file: filePath, line: d.line_number, content: d.lines?.text?.replace(/\n$/, '') || '', isContext: true });
                         }
                     }
-                } catch (_err) { }
+                } catch { }
             }
         });
         proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });

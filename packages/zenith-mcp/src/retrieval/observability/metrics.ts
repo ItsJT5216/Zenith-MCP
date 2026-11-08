@@ -51,7 +51,8 @@ export class RollingMetrics {
   private _evict(now: number): void {
     const cutoff = now - this._windowMs;
     let i = 0;
-    while (i < this._events.length && this._events[i].ts < cutoff) {
+    for (const item of this._events) {
+      if (!(item.ts < cutoff)) break;
       i++;
     }
     if (i > 0) this._events = this._events.slice(i);
@@ -60,7 +61,8 @@ export class RollingMetrics {
   private _evictRescore(now: number): void {
     const cutoff = now - this._windowMs;
     let i = 0;
-    while (i < this._rescoreTimes.length && this._rescoreTimes[i] < cutoff) {
+    for (const ts of this._rescoreTimes) {
+      if (!(ts < cutoff)) break;
       i++;
     }
     if (i > 0) this._rescoreTimes = this._rescoreTimes.slice(i);

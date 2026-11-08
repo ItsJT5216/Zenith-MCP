@@ -1,5 +1,8 @@
 
-export const TOKEN_WEIGHTS: Record<string, number> = {
+export const TOKEN_WEIGHTS: Record<string, number> & Record<
+  "manifest:" | "lock:" | "framework:" | "lang:" | "ci:" | "container:" | "infra:" | "db:" | "vcs:" | "layout:" | "readme:",
+  number
+> = {
   "manifest:": 3.0,
   "lock:": 2.5,
   "framework:": 2.5,
@@ -89,11 +92,15 @@ function _applyFamilyCap(tokens: Record<string, number>): Record<string, number>
   const result: Record<string, number> = { ...tokens };
 
   for (let pass = 0; pass < 5; pass++) {
-    const families: Map<string, string[]> = new Map();
-    for (const tok of Object.keys(result)) {
+    const families: Map<string, Array<[string, number]>> = new Map();
+    for (const [tok, value] of Object.entries(result)) {
       const family = tok.split(":")[0] + ":";
-      if (!families.has(family)) families.set(family, []);
-      families.get(family)!.push(tok);
+      let members = families.get(family);
+      if (members === undefined) {
+        members = [];
+        families.set(family, members);
+      }
+      members.push([tok, value]);
     }
 
     const currentTotal = Object.values(result).reduce((s, v) => s + v, 0);
@@ -103,11 +110,11 @@ function _applyFamilyCap(tokens: Record<string, number>): Record<string, number>
     let changed = false;
 
     for (const [, familyTokens] of families.entries()) {
-      const familySum = familyTokens.reduce((s, tok) => s + result[tok], 0);
+      const familySum = familyTokens.reduce((s, [, value]) => s + value, 0);
       if (familySum > cap) {
         const scale = cap / familySum;
-        for (const tok of familyTokens) {
-          result[tok] *= scale;
+        for (const [tok, value] of familyTokens) {
+          result[tok] = value * scale;
         }
         changed = true;
       }
@@ -121,13 +128,13 @@ function _applyFamilyCap(tokens: Record<string, number>): Record<string, number>
 
 export function buildTokens(input: {
   foundFiles: Set<string>;
-  readmeLines?: string[];
+  readmeLines?: string[] | undefined;
 }): Record<string, number> {
   const raw: Record<string, number> = {};
 
   // Manifests
   for (const filepath of input.foundFiles) {
-    const basename = filepath.split("/").pop()!;
+    const basename = filepath.slice(filepath.lastIndexOf("/") + 1);
     if (MANIFEST_LANGUAGE_MAP[basename] !== undefined) {
       raw[`manifest:${basename}`] = TOKEN_WEIGHTS["manifest:"];
       for (const lang of MANIFEST_LANGUAGE_MAP[basename]) {
@@ -138,7 +145,7 @@ export function buildTokens(input: {
 
   // Lockfiles
   for (const filepath of input.foundFiles) {
-    const basename = filepath.split("/").pop()!;
+    const basename = filepath.slice(filepath.lastIndexOf("/") + 1);
     if (LOCKFILE_NAMES.has(basename)) {
       raw[`lock:${basename}`] = TOKEN_WEIGHTS["lock:"];
     }
@@ -156,7 +163,7 @@ export function buildTokens(input: {
 
   // Containers
   for (const f of input.foundFiles) {
-    const basename = f.split("/").pop()!;
+    const basename = f.slice(f.lastIndexOf("/") + 1);
     if (CONTAINER_FILES.has(basename)) {
       raw[`container:${basename}`] = TOKEN_WEIGHTS["container:"];
     }
@@ -164,7 +171,7 @@ export function buildTokens(input: {
 
   // Infra
   for (const f of input.foundFiles) {
-    const basename = f.split("/").pop()!;
+    const basename = f.slice(f.lastIndexOf("/") + 1);
     if (INFRA_FILES.has(basename)) {
       raw[`infra:${basename}`] = TOKEN_WEIGHTS["infra:"];
     }
@@ -172,7 +179,7 @@ export function buildTokens(input: {
 
   // DB
   for (const f of input.foundFiles) {
-    const basename = f.split("/").pop()!;
+    const basename = f.slice(f.lastIndexOf("/") + 1);
     if (DB_FILES.has(basename)) {
       raw[`db:${basename}`] = TOKEN_WEIGHTS["db:"];
     }

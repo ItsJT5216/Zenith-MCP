@@ -54,7 +54,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
 
       - name: Dazbo's Gemini Code Review & Issue Triage
-        uses: derailed-dash/gemini-review-action@v1.8.3
+        uses: derailed-dash/gemini-review-action@v1.9.0
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

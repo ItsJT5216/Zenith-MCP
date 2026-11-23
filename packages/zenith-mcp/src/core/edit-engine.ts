@@ -461,7 +461,10 @@ async function applyEditList(content: string, edits: Edit[], { filePath, isBatch
                 const matchedLines = match.matchedText.split('\n') as NonEmptyLines;
                 const newLines = normalizedNew.split('\n');
                 const originalIndent = matchedLines[0].match(/^\s*/)?.[0] || '';
-                const oldIndent = (normalizeLineEndings(edit.oldContent!).split('\n') as NonEmptyLines)[0].match(/^\s*/)?.[0] || '';
+                const { oldContent } = edit;
+                const oldIndent = oldContent === undefined
+                    ? ''
+                    : (normalizeLineEndings(oldContent).split('\n') as NonEmptyLines)[0].match(/^\s*/)?.[0] || '';
                 const reindentedNew = newLines.map((line, j) => {
                     if (j === 0) return originalIndent + line.trimStart();
                     const lineIndent = line.match(/^\s*/)?.[0] || '';

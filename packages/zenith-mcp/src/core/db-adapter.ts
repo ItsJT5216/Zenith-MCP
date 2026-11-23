@@ -1,4 +1,4 @@
-import { DatabaseSync, StatementSync } from 'node:sqlite';
+import { DatabaseSync, StatementSync, type SQLInputValue } from 'node:sqlite';
 
 // ---------------------------------------------------------------------------
 // DbConnection — opaque handle wrapping the driver
@@ -1027,8 +1027,14 @@ export function execRaw(conn: DbConnection, sql: string): void {
  * Bypasses the statement cache to avoid pollution from ad-hoc queries.
  * Use ONLY in tests for assertions — production code should use dedicated adapter functions.
  */
-export function queryRaw(conn: DbConnection, sql: string, ...params: any[]): ReturnType<StatementSync['all']> {
-    return handle(conn).prepare(sql).all(...params);
+export function queryRaw(
+    conn: DbConnection,
+    sql: string,
+    ...params: SQLInputValue[] | Parameters<StatementSync['all']>
+): ReturnType<StatementSync['all']> {
+    const stmt = handle(conn).prepare(sql);
+    // Forward either overload's arguments without selecting one at runtime.
+    return Reflect.apply(stmt.all, stmt, params);
 }
 
 // ---------------------------------------------------------------------------

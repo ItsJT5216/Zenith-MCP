@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import type { RankingEvent } from "../models.js";
 
 export interface ReplayMetrics {
   totalEvents: number;

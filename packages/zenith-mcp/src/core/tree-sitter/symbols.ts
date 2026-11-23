@@ -303,11 +303,8 @@ export function selectDefinitionNode(nameNode: Node): DefinitionNodeSelection | 
         }
         cur = cur.parent;
     }
-    if (candidates.length === 0) return null;
-
-    // candidates is non-empty (just checked); the `!` is erased at compile
-    // time and preserves runtime exactly.
-    const primary = candidates[0]!;
+    const primary = candidates[0];
+    if (primary === undefined) return null;
     let span: Node = primary;
 
     // Wrapper handling: only the IMMEDIATE AST parent can promote the span.

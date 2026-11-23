@@ -30,7 +30,7 @@ export interface RetrievalContext {
   sessionId: string;
   query: string;
   toolCallHistory: string[];
-  serverHint?: string;
+  serverHint?: string | undefined;
   queryMode: "env" | "nl";
 }
 
@@ -78,7 +78,7 @@ export interface ToolCatalogSnapshot {
 
 export interface RootEvidence {
   rootUri: string;
-  rootName?: string;
+  rootName?: string | undefined;
   tokens: Record<string, number>;
   features: Record<string, unknown>;
   confidence: number;
@@ -119,7 +119,7 @@ export interface RankingEvent {
   sessionId: string;
   turnNumber: number;
   catalogVersion: string;
-  workspaceHash?: string;
+  workspaceHash?: string | undefined;
   workspaceConfidence: number;
   convConfidence: number;
   alpha: number;

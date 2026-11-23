@@ -16,7 +16,7 @@ export class SessionStateManager {
       this._sessions.set(sessionId, new Set(this._config.anchorTools));
     }
     // Return a copy — callers cannot mutate internal state
-    return new Set(this._sessions.get(sessionId)!);
+    return new Set(this._sessions.get(sessionId));
   }
 
   getActiveTools(sessionId: string): Set<string> {

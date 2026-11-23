@@ -1,5 +1,5 @@
 import path from 'path';
-import { normalizePath as _normalizePath, expandHome as _expandHome } from './path-utils.js';
+import { normalizePath as _normalizePath } from './path-utils.js';
 
 // Re-export for backward compatibility with tests
 export { normalizePath, expandHome } from './path-utils.js';

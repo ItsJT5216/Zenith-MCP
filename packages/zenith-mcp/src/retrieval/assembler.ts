@@ -15,7 +15,8 @@ function truncateDescription(desc: string): string {
   if (!desc || desc.length <= MAX_SUMMARY_CHARS) return desc;
 
   // Try first sentence
-  const parts = desc.split(SENTENCE_BOUNDARY, 2);
+  // Nonempty input and a nonempty separator with limit 2 always produce a first segment.
+  const parts = desc.split(SENTENCE_BOUNDARY, 2) as [string, ...string[]];
   if (parts.length > 1 && parts[0].length <= MAX_SUMMARY_CHARS) {
     return parts[0];
   }

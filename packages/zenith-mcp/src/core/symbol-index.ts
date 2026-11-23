@@ -100,7 +100,8 @@ const _dbCache = new Map<string, DbConnection>();
 let _exitHandlerRegistered = false;
 
 export function getDb(repoRoot: string): DbConnection {
-    if (_dbCache.has(repoRoot)) return _dbCache.get(repoRoot)!;
+    const cached = _dbCache.get(repoRoot);
+    if (cached !== undefined) return cached;
 
     const mcpDir = path.join(repoRoot, '.mcp'); // nosemgrep
     mkdirSync(mcpDir, { recursive: true }); // nosemgrep
